@@ -59,9 +59,11 @@ class FakeMSDC:
         self.commands = []         # (opcode, answered)
 
     def powered(self):
+        # Chip power: GPIO85 is the ACTIVE-LOW enable of sdio_fixed_3v3 ("WIFI_PDN"): low = on.
+        # (v0.11 drove it high and the real chip stayed silent: WIFI-03.)
         m = self.m
         vgp3_on = (m.pmic.get(0x041e, 0) >> 15) & 1
-        return vgp3_on and m.pinmode(85) == 0 and m.pin(85)
+        return vgp3_on and m.pinmode(85) == 0 and not m.pin(85)
 
     def read(self, off):
         v = self.r.get(('msdc3', off), 0)

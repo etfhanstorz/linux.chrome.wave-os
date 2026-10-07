@@ -144,19 +144,25 @@ static int wifi_on(void) {
     pmic_read(0x041e, &en); pmic_read(0x043a, &vs);
     puts("  VGP3: con7 "); put_hex(en); puts(", con21 "); put_hex(vs); putc('\n');
     if (!((en >> 15) & 1) || ((vs >> 5) & 7) != 7) { err("WIFI", 2, "Wi-Fi bus supply VGP3 did not switch on at 3.3 V"); return 0; }
-    // 2. Chip power: GPIO85 as a plain GPIO, driven high
-    pin_mode(85, 0);
-    gpio_out(85, 1);
-    delay_us(20000);                             // regulators + card power-up
-    puts("  chip power gpio85: mode "); put_dec(gpio_mode(85)); puts(" level "); put_dec(gpio_bit(0x500, 85)); putc('\n');
-    // 3. Controller at a safe slow clock; give the card its >= 74 clocks
-    msdc_init_slow();
-    delay_us(5000);
-    puts("  msdc3 cfg "); put_hex(msdc_rd(MSDC_CFG)); puts(" sdc_cfg "); put_hex(msdc_rd(SDC_CFG)); putc('\n');
-    // 4. SDIO greeting
+    // 2. Chip power on GPIO85. The DT's sdio_fixed_3v3 regulator has no "enable-active-high", so its
+    //    enable is ACTIVE LOW (the line is also named WIFI_PDN: power-down). v0.11 drove it high and the
+    //    chip stayed silent (WIFI-03 on the real hana). Try low first; if silent, power off and try high.
     u32 ocr = 0;
-    msdc_cmd(0, 0, RSP_NONE, 0);                 // GO_IDLE (harmless for SDIO)
-    if (msdc_cmd(5, 0, RSP_R3, &ocr)) { err("WIFI", 3, "chip did not answer CMD5 (not powered, or bus problem)"); return 0; }
+    int answered = 0;
+    for (u32 level = 0; level < 2 && !answered; level++) {
+        pin_mode(85, 0);
+        gpio_out(85, level);
+        delay_us(30000);                         // regulator + card power-up
+        // 3. Controller at a safe slow clock; give the card its >= 74 clocks
+        msdc_init_slow();
+        delay_us(5000);
+        msdc_cmd(0, 0, RSP_NONE, 0);             // GO_IDLE (harmless for SDIO)
+        answered = msdc_cmd(5, 0, RSP_R3, &ocr) == 0;
+        puts("  gpio85 "); puts(level ? "high" : "low"); puts(": CMD5 "); puts(answered ? "answered" : "no answer");
+        puts(" (msdc3 cfg "); put_hex(msdc_rd(MSDC_CFG)); puts(", lines "); put_hex(msdc_rd(0x08)); puts(")\n");
+        if (!answered && level == 0) { gpio_out(85, 1); delay_us(50000); }   // power off before the other try
+    }
+    if (!answered) { err("WIFI", 3, "chip did not answer CMD5 (not powered, or bus problem)"); return 0; }
     puts("  CMD5 ocr "); put_hex(ocr); puts(": "); put_dec((ocr >> 28) & 7); puts(" functions\n");
     u32 want = ocr & 0x300000;                   // 3.2-3.4 V
     if (!want) want = ocr & 0xffffff;
