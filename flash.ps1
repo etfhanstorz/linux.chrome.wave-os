@@ -1,8 +1,8 @@
 # wave-os USB flasher. Writes out.kpart into the ChromeOS-kernel partition of a USB stick.
 # Run via flash.bat (asks for admin). Use -DryRun to only list what it would do.
-param([switch]$DryRun)
+param([switch]$DryRun, [string]$Image = 'out.kpart')
 $ErrorActionPreference = 'Stop'
-$kpart = Join-Path $PSScriptRoot 'out.kpart'
+$kpart = Join-Path $PSScriptRoot $Image
 $KERNEL_GUID = 'FE3A2A5D-4F32-41A7-B725-ACCC3285A309'   # ChromeOS kernel partition type
 
 function Stop-Here($msg) { Write-Host "`nSTOPPED: $msg" -ForegroundColor Red; Read-Host "`nPress Enter to close"; exit 1 }
@@ -11,7 +11,7 @@ if (-not (Test-Path $kpart)) { Stop-Here "out.kpart not found. The build step fa
 $data = [IO.File]::ReadAllBytes($kpart)
 $padded = New-Object byte[] ([math]::Ceiling($data.Length / 512) * 512)
 [Array]::Copy($data, $padded, $data.Length)
-Write-Host "wave-os image: $($data.Length) bytes`n"
+Write-Host "Image to write: $Image ($($data.Length) bytes)`n"
 
 # Only removable/USB disks of plausible size. Never the system disk.
 $disks = @(Get-Disk | Where-Object { $_.BusType -eq 'USB' -and -not $_.IsSystem -and -not $_.IsBoot -and $_.Size -gt 1GB -and $_.Size -lt 64GB })
