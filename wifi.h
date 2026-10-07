@@ -727,9 +727,15 @@ static int wifi_scan(void) {
     wifi_event_hook = scan_event;
     puts("scanning 2.4 GHz...\n");
     int ok = scan_band(0, ch24, sizeof ch24);
-    if (ok) { puts("scanning 5 GHz...\n"); ok = scan_band(1, ch5, sizeof ch5); }
+    if (ok) {                                                       // 5 GHz in groups of 4 channels (Linux's default); a failure here must not hide the 2.4 GHz results
+        for (u32 i = 0; i < sizeof ch5 && ok; i += 4) {
+            u32 n5 = sizeof ch5 - i < 4 ? sizeof ch5 - i : 4;
+            puts("scanning 5 GHz channels "); put_dec(ch5[i]); puts("...\n");
+            ok = scan_band(1, ch5 + i, n5);
+        }
+    }
     wifi_event_hook = 0;
-    if (!ok) return 0;
+    if (!scan_events && !nap) return 0;                              // nothing at all: the error above says why
     puts("scan events received: "); put_dec(scan_events); puts(" ("); put_dec(scan_bytes); puts(" bytes)\n");
     if (!scan_events) errs("WIFI", 14, 3, "the scan finished but the firmware sent no scan results");
     puts("found "); put_dec(nap); puts(" networks:\n");
