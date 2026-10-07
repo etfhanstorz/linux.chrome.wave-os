@@ -506,6 +506,7 @@ bad:
 // packet-length registers 0xb4/0xb5 (v1.15 on hana: no status bit, but a 0x700-byte packet was sitting there).
 static u32 wifi_last_len;
 static u32 scan_done, scan_events;
+static u32 ev_log, ev_sets[12], ev_more[12], ev_size[12], ev_len[12], recs_seen;
 static u8 raw_rec[40]; static u32 raw_len, raw_taken;   // raw bytes of the first scan record (diagnostics)        // set by the scan event handler (defined further down)
 static u32 w1_err, w1_tries;              // last failed command write: controller error, attempts made
 static u32 w3_why, w3_a, w3_b;           // why a command answer was 'malformed': 1 = bad length (a), 2 = block read failed with error a for length b
@@ -697,6 +698,7 @@ static u32 nap, scan_events, scan_done, scan_bytes;
 static void scan_event(const u8 *ev, u32 len) {
     if (len < 11 || get16(ev) != 0x58) return;
     scan_events++; scan_bytes += len;
+    if (ev_log < 12) { ev_sets[ev_log] = ev[10]; ev_more[ev_log] = ev[4]; ev_size[ev_log] = get16(ev + 8); ev_len[ev_log] = len; ev_log++; }
     u32 size = get16(ev + 8), left = len - 11 < size ? len - 11 : size;
     const u8 *t = ev + 11;
     struct ap *cur = 0;
@@ -704,6 +706,7 @@ static void scan_event(const u8 *ev, u32 len) {
         u32 type = get16(t), tl = get16(t + 2);
         if (left < 4 + tl) break;
         if (type == 0x0156 && tl >= 6 + 12) {                      // BSS_SCAN_RSP: bssid[6] + frame body (ts8, interval2, cap2, IEs)
+            recs_seen++;
             if (!raw_taken) { raw_taken = 1; raw_len = tl; for (u32 q = 0; q < 40 && q < tl + 4; q++) raw_rec[q] = t[q]; }
             u32 k;
             for (k = 0; k < nap; k++) { u32 same = 1; for (u32 m = 0; m < 6; m++) if (aps[k].bssid[m] != t[4 + m]) same = 0; if (same) break; }
@@ -736,7 +739,10 @@ static void scan_event(const u8 *ev, u32 len) {
 // Wait up to `ms` for events on the command port, handing each to the hook, until a scan finishes.
 static void wifi_poll_events(u32 ms) {
     u64 hz = tick_hz(), t0 = ticks();
-    while (!scan_done && hz && ticks() - t0 < hz / 1000 * ms) {
+    u64 done_at = 0;                                                // when the last-report flag was seen: keep listening a little longer for stragglers
+    while (hz && ticks() - t0 < hz / 1000 * ms) {
+        if (scan_done && !done_at) done_at = ticks();
+        if (done_at && ticks() - done_at > hz * 3 / 2) break;
         int st = fn1_rd(0x03);
         if (cmd_packet_waiting(st)) {
             int l0 = fn1_rd(0xb4), l1 = fn1_rd(0xb5);
@@ -783,7 +789,7 @@ static int wifi_scan(int with5) {
     if (rc > 0) puts("  (MAC_CONTROL rejected; continuing)\n");
     static const u8 ch24[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
     static const u8 ch5[] = {36, 40, 44, 48, 149, 153, 157, 161, 165};
-    nap = 0; scan_events = 0; scan_bytes = 0; dbg_taken = 0; raw_taken = 0;
+    nap = 0; scan_events = 0; scan_bytes = 0; dbg_taken = 0; raw_taken = 0; ev_log = 0; recs_seen = 0;
     wifi_event_hook = scan_event;
     puts("scanning 2.4 GHz...\n");
     int ok = scan_band(0, ch24, sizeof ch24);
@@ -798,6 +804,8 @@ static int wifi_scan(int with5) {
     if (!scan_events && !nap) return 0;                              // nothing at all: the error above says why
     if (raw_taken) { puts("first record: block length "); put_dec(raw_len); puts(", bytes:"); for (u32 q = 0; q < 40; q++) { puts(" "); putc("0123456789abcdef"[raw_rec[q] >> 4]); putc("0123456789abcdef"[raw_rec[q] & 15]); } putc('\n'); }
     if (dbg_taken) { puts("first big packet, block starts:"); for (u32 b = 0; b < dbg_blocks; b++) { putc(' '); put_hex(dbg_starts[b]); } putc('\n'); }
+    for (u32 i = 0; i < ev_log; i++) { puts("  event "); put_dec(i + 1); puts(": "); put_dec(ev_sets[i]); puts(" networks, more "); put_dec(ev_more[i]); puts(", size "); put_dec(ev_size[i]); puts("/"); put_dec(ev_len[i]); putc('\n'); }
+    puts("scan records seen: "); put_dec(recs_seen); putc('\n');
     puts("scan events received: "); put_dec(scan_events); puts(" ("); put_dec(scan_bytes); puts(" bytes)\n");
     if (!scan_events) errs("WIFI", 14, 3, "the scan finished but the firmware sent no scan results");
     u32 hidden = 0;
