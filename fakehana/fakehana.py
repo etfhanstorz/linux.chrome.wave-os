@@ -193,6 +193,8 @@ class Machine:
                 self._stop('FREEZE', 'read of %s while the display is powered off (bus hang)' % self._blockname(bank, off))
                 return 0
             v = self.regs.get((bank, off), 0)
+            if bank == 'mmsys' and off == 0xe004 and self.regs.get(('mmsys', 0xc00c), 0) & 1:
+                v |= 0x6                                     # RDMA0 sees frame start/end while OVL0 runs
             self._mmio('R', bank, off, v)
             return v
         def wr(uc, off, sz, val, _):
@@ -412,7 +414,7 @@ def main():
         cnt = Counter((names.get(cmd, hex(cmd)), res) for cmd, res in m.ec.commands)
         print('  EC commands: ' + ', '.join('%s x%d%s' % (n, k, '' if r == 0 else ' (result %d)' % r)
                                             for (n, r), k in cnt.items()))
-        print('  SPI packets: %d' % m.spi.transfers)
+        print('  SPI packets: %d%s' % (m.spi.transfers, ', JAMMED %d times (odd-sized chunk mid-message)' % m.spi.jams if m.spi.jams else ''))
     if m.keys:
         print('  keys typed: %r (done at fake %.1f s)' % (a.keys, m.keys.end_s))
 

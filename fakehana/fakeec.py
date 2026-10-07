@@ -81,7 +81,10 @@ class FakeEC:
     def _respond(self, result, data):
         hdr = bytearray(struct.pack('<BBHHH', 3, 0, result, len(data), 0))
         hdr[1] = (-(sum(hdr) + sum(data))) & 0xff
-        self.out = [0xfa, 0xfa, 0xfa, 0xec] + list(hdr) + list(data)
+        # The real EC takes a varying time to answer, so the frame start byte lands anywhere in a
+        # 32-byte chunk. Vary it (deterministically) so drivers meet every alignment.
+        busy = (len(self.commands) * 7) % 45 + 1
+        self.out = [0xfa] * busy + [0xec] + list(hdr) + list(data)
 
     def _process(self):
         req = bytes(self.rx)
@@ -112,6 +115,10 @@ class FakeSPI:
         self.status = 0
         self.active = False       # chip-select asserted
         self.transfers = 0
+        # MODEL (from wave-os v0.8 on the real hana): after a chunk whose length is not a multiple
+        # of 4, the next chunk in the same chip-select session never completes (STATUS0 stays 0).
+        self.odd_pending = False
+        self.jams = 0
 
     def read(self, off):
         if off == 0x14:                                      # SPI_RX_DATA
@@ -136,6 +143,7 @@ class FakeSPI:
         self.regs[0x18] = val & ~0x3                         # ACT/RESUME are pulses
         if val & 0x4:                                        # SPI_CMD_RST
             self.tx, self.rxq, self.status = [], [], 0
+            self.odd_pending = False
         if (old & 0x10) and not (val & 0x10) and self.active:
             self.active = False                              # PAUSE_EN cleared: chip-select released
         if val & 0x3:                                        # ACT or RESUME: run one packet
@@ -143,6 +151,11 @@ class FakeSPI:
                 self.active = True
                 self.ec.cs_begin()
             n = ((self.regs.get(0x04, 0) >> 16) & 0x3ff) + 1
+            if self.odd_pending:
+                self.jams += 1                               # jammed: status never comes
+                return
+            if n % 4 and (val & 0x10):
+                self.odd_pending = True
             data = (self.tx + [0] * n)[:n]
             self.tx = self.tx[n:] if len(self.tx) > n else []
             self.rxq = [self.ec.byte(b) for b in data]

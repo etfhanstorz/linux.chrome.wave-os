@@ -61,7 +61,7 @@ static void fill(const struct fb *f, u32 rgb) {
 
 #include "rlog.h"
 #include "console.h"
-#define VERSION "wave-os v0.8"
+#define VERSION "wave-os v0.8.1"
 #include "sys.h"
 #include "probe.h"
 #include "display.h"
@@ -163,7 +163,7 @@ void main(const u8 *dtb) {
 
 #ifndef QEMU
     puts("turning on backlight (GPIO32, pin87, GPIO95) and overlay engine (OVL0_EN)\n");
-    display_on();
+    if (src) display_on(&f);
     puts("after:\n");
     dump("ovl0", 0x1400c000UL, ovl_en, 1);
     dump("gpio", 0x10005000UL, gpio_regs, 10);

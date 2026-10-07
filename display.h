@@ -25,13 +25,46 @@ static void delay_us(u32 us) {
         if (hz && ticks() - t0 >= hz / 1000000 * us) return;
 }
 
-static void display_on(void) {
+#define RDMA0_BASE 0x1400e000UL
+#define RDMA_FRAME_END (1u << 2)
+
+// Clear RDMA0's interrupt status, wait ~4 frames, return what happened:
+// bit1 frame start, bit2 frame end, bit3 abnormal end, bit4 FIFO underflow.
+static u32 rdma_frames(void) {
+    volatile u32 *st = (volatile u32 *)(RDMA0_BASE + 0x04);
+    *st = 0;
+    delay_us(70000);
+    return *st;
+}
+
+static void ovl_put(u32 off, u32 v) { *(volatile u32 *)(OVL0_BASE + off) = v; }
+
+// v0.7 showed that OVL0_EN = 1 alone works only sometimes, so: stop the overlay, re-program
+// layer 0 with the screen we found, start it again, and check that frames reach RDMA0. Retry.
+static int display_on(const struct fb *f) {
+    puts("rdma0 status before: "); put_hex(rdma_frames()); putc('\n');
     gpio_out(32, 1);                 // backlight power (bl_fixed regulator)
     delay_us(2000);
     pin_mode(87, 0);                 // brightness pin: plain GPIO held high = 100% duty, no PWM block needed
     gpio_out(87, 1);
     delay_us(1000);
     gpio_out(95, 1);                 // backlight enable
-    *(volatile u32 *)(OVL0_BASE + 0x0c) = 1;   // restart the overlay engine (OVL0_EN)
-    __asm__ volatile("dsb sy" ::: "memory");
+    u32 size = (f->h << 16) | f->w;
+    for (int attempt = 1; attempt <= 3; attempt++) {
+        ovl_put(0x0c, 0);            // OVL0_EN off
+        delay_us(20000);
+        ovl_put(0x20, size);         // ROI size
+        ovl_put(0x38, size);         // layer 0 source size
+        ovl_put(0x3c, 0);            // layer 0 offset
+        ovl_put(0x44, f->stride);    // layer 0 pitch
+        ovl_put(0xf40, (u32)f->addr);// layer 0 address
+        ovl_put(0x2c, 1);            // only layer 0 on
+        ovl_put(0x0c, 1);            // OVL0_EN on
+        __asm__ volatile("dsb sy" ::: "memory");
+        u32 s = rdma_frames();
+        puts("display attempt "); put_dec(attempt); puts(": rdma0 status "); put_hex(s);
+        puts(s & RDMA_FRAME_END ? " (frames flowing)\n" : " (no frames)\n");
+        if (s & RDMA_FRAME_END) return 1;
+    }
+    return 0;
 }

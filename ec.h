@@ -30,7 +30,7 @@
 static u32 spi_rd(u32 off) { return *(volatile u32 *)(SPI_BASE + off); }
 static void spi_wr(u32 off, u32 v) { *(volatile u32 *)(SPI_BASE + off) = v; }
 static int spi_paused;          // a chunk ended with chip-select still held
-static u32 spi_timeouts;
+static u32 spi_timeouts, spi_last_cmd, spi_last_len;   // last timeout: CMD register, chunk length
 
 static void spi_init(void) {
     u32 cmd = spi_rd(SPI_CMD);
@@ -69,7 +69,7 @@ static int spi_chunk(const u8 *tx, u8 *rx, u32 n) {
         if (st) break;
         if (hz && ticks() - t0 > hz / 50) break;                     // 20 ms
     }
-    if (!st) { spi_timeouts++; return -1; }
+    if (!st) { spi_timeouts++; spi_last_cmd = spi_rd(SPI_CMD); spi_last_len = n; return -1; }
     spi_paused = (st & 2) != 0;
     for (u32 i = 0; i < n; i += 4) {
         u32 w = spi_rd(SPI_RX_DATA);
@@ -132,11 +132,18 @@ static int ec_cmd(u16 cmd, u8 ver, const u8 *p, u16 plen, u8 *resp, u16 rmax, u1
         }
         if (hz && ticks() - t0 > hz / 5) { ret = -5; goto out; }
     }
-    if (have < 8 && spi_xfer(0, ec_in + have, 8 - have)) { ret = -6; goto out; }
-    if (have < 8) have = 8;
+    // Read the rest in whole 32-byte chunks only: an odd-sized chunk mid-message left the real
+    // controller stuck (v0.8 on hana). Bytes past the end of the reply are harmless (EC sends 0xed).
+    while (have < 8) {
+        if (spi_xfer(0, ec_in + have, 32)) { ret = -6; goto out; }
+        have += 32;
+    }
     u16 dlen = ec_in[4] | (ec_in[5] << 8);
-    if (ec_in[0] != 3 || dlen > sizeof ec_in - 8) { ret = -7; goto out; }
-    if (have < 8u + dlen && spi_xfer(0, ec_in + have, 8 + dlen - have)) { ret = -8; goto out; }
+    if (ec_in[0] != 3 || 8u + dlen + 32 > sizeof ec_in) { ret = -7; goto out; }
+    while (have < 8u + dlen) {
+        if (spi_xfer(0, ec_in + have, 32)) { ret = -8; goto out; }
+        have += 32;
+    }
     sum = 0;
     for (u32 i = 0; i < 8u + dlen; i++) sum += ec_in[i];
     if (sum) { ret = -9; goto out; }
@@ -202,8 +209,19 @@ static int kb_init(void) {
     r = ec_cmd(EC_CMD_MKBP_INFO, 0, 0, 0, buf, 9, &n);
     if (r == 0) { puts("keyboard matrix: "); put_dec(buf[0]); puts(" rows x "); put_dec(buf[4]); puts(" cols\n"); }
     u8 m[KB_COLS];
-    r = ec_cmd(EC_CMD_MKBP_STATE, 0, 0, 0, m, KB_COLS, &n);
-    puts("mkbp state: result "); put_dec((u64)(r < 0 ? -r : r)); puts(r < 0 ? " (wave-os error)" : ""); puts(", "); put_dec(n); puts(" bytes\n");
+    for (int attempt = 1; attempt <= 3; attempt++) {
+        n = 0;
+        r = ec_cmd(EC_CMD_MKBP_STATE, 0, 0, 0, m, KB_COLS, &n);
+        puts("mkbp state try "); put_dec(attempt); puts(": result "); put_dec((u64)(r < 0 ? -r : r));
+        puts(r < 0 ? " (wave-os error)" : ""); puts(", "); put_dec(n); puts(" bytes");
+        if (r != 0) {
+            puts(" | spi timeouts "); put_dec(spi_timeouts); puts(" last cmd "); put_hex(spi_last_cmd);
+            puts(" len "); put_dec(spi_last_len); puts(" | rx");
+            for (u32 i = 0; i < 24; i++) { putc(' '); put_hex(ec_in[i]); }
+        }
+        putc('\n');
+        if (r == 0) break;
+    }
     if (r != 0) return 0;
     for (u32 c = 0; c < KB_COLS; c++) kb_state[c] = m[c];
     kb_ok = 1;
