@@ -560,13 +560,14 @@ static void wifi_power_cycle(void) {
 }
 
 // Wi-Fi step: make sure the chip is up, then run the firmware's init commands and print its MAC address.
+static int hw_rc;                       // how the first command failed (for the final message)
 static u8 wifi_mac[6];
 static int wifi_ready;                  // FUNC_INIT + GET_HW_SPEC done in this boot
 static int wifi_hw_spec(void) {
     u8 r[96]; u32 n = 0;
     puts("talking to the Wi-Fi firmware...\n");
     int rc = wifi_cmd(0x00a9, 0, 0, r, sizeof r, &n);
-    if (rc == -2) return -2;                             // silent: caller may power-cycle
+    if (rc == -2 || rc == -1) { hw_rc = rc; return -2; }  // silent or refused: caller power-cycles and retries
     if (!wifi_cmd_err("FUNC_INIT", rc, 0)) return 0;
     static const u8 zero[63];                            // GET_HW_SPEC request: all-zero spec
     if (!wifi_cmd_err("GET_HW_SPEC", wifi_cmd(0x0003, zero, sizeof zero, r, sizeof r, &n), 0)) return 0;
@@ -580,18 +581,23 @@ static int wifi_hw_spec(void) {
     return 1;
 }
 
-static int wifi_init(void) {
-    if (!wifi_fw()) return 0;
-    int r = wifi_hw_spec();
-    if (r != -2) return r == 1;
-    // The running firmware (left by ChromeOS) never answered: restart the chip and load our own firmware.
-    puts("  no answer from the leftover firmware.\n");
+// Always start the chip from cold: its firmware state after a previous run (unread packets, a half-finished scan)
+// made the first command fail (v1.21: FUNC_INIT send error 33). Power-cycle, upload our firmware, then talk.
+static int wifi_cold_start(void) {
     wifi_power_cycle();
-    wifi_seq = 0;
-    if (!wifi_fw()) return 0;
-    r = wifi_hw_spec();
-    if (r == -2) { wifi_cmd_err("FUNC_INIT", -2, 0); return 0; }
-    return r == 1;
+    wifi_seq = 0; wifi_dn_seen = 0; wifi_last_len = 0; wifi_dbg_n = 0;
+    return wifi_fw();
+}
+
+static int wifi_init(void) {
+    for (int attempt = 1; attempt <= 2; attempt++) {
+        if (!wifi_cold_start()) return 0;
+        int r = wifi_hw_spec();
+        if (r != -2) return r == 1;
+        if (attempt == 1) puts("  the chip did not take the first command: restarting it once more.\n");
+    }
+    wifi_cmd_err("FUNC_INIT", hw_rc, 0);
+    return 0;
 }
 // ---- v1.11: scan for networks (legacy scan command 0x0006; answer layout: Linux mwifiex scan.c) ----
 // Extended scan (what Linux uses on this chip): command 0x0107 = {u32 reserved, TLVs}. The command's answer carries
