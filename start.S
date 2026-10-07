@@ -15,6 +15,9 @@ _start:
 
 entry:
     mov     x19, x0             // save DTB pointer
+    // The firmware leaves data (e.g. the device tree) dirty in the D-cache. We run with caches
+    // off, so write it all back to RAM first -- before we write any memory ourselves.
+    bl      dcache_clean_inval_all
     // Mask interrupts; works at EL1 or EL2 since we never touch EL-specific regs.
     msr     daifset, #0xf
     // Park secondary cores (only if firmware started them)
@@ -83,3 +86,45 @@ fault_handler:
     str     w1, [x0]
     ldp     x0, x1, [sp], #16
     eret
+
+// Clean + invalidate the whole data cache by set/way (all levels up to the Level of Coherence).
+// Uses only registers x0-x11; no memory. Works at EL1 or EL2 with the MMU off.
+dcache_clean_inval_all:
+    mrs     x0, clidr_el1
+    and     x3, x0, #0x7000000
+    lsr     x3, x3, #23         // x3 = LoC * 2
+    cbz     x3, 9f
+    mov     x10, #0             // x10 = cache level * 2
+1:  add     x2, x10, x10, lsr #1
+    lsr     x1, x0, x2
+    and     x1, x1, #7          // cache type at this level
+    cmp     x1, #2
+    b.lt    5f                  // no data cache here
+    msr     csselr_el1, x10
+    isb
+    mrs     x1, ccsidr_el1
+    and     x2, x1, #7
+    add     x2, x2, #4          // log2(line length)
+    mov     x4, #0x3ff
+    and     x4, x4, x1, lsr #3  // max way number
+    clz     w5, w4              // way shift
+    mov     x7, #0x7fff
+    and     x7, x7, x1, lsr #13 // max set number
+2:  mov     x9, x4
+3:  lsl     x6, x9, x5
+    orr     x11, x10, x6
+    lsl     x6, x7, x2
+    orr     x11, x11, x6
+    dc      cisw, x11
+    subs    x9, x9, #1
+    b.ge    3b
+    subs    x7, x7, #1
+    b.ge    2b
+5:  add     x10, x10, #2
+    cmp     x3, x10
+    b.gt    1b
+9:  mov     x10, #0
+    msr     csselr_el1, x10
+    dsb     sy
+    isb
+    ret

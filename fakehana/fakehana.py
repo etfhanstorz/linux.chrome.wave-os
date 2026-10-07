@@ -5,7 +5,8 @@ What it imitates (best guesses where marked GUESS -- the real hardware is still 
   * depthcharge's hand-off: unpack the signed kpart, read the FIT, pick the default config,
     add the DT nodes the firmware adds (bootargs, ramoops, optional coreboot table),
     place the arm64 Image at RAM + text_offset and jump to it with x0 = device tree.
-  * RAM at 0x40000000 (real hana has 4 GB; the first 2 GB are modelled).
+  * RAM at 0x40000000 (real hana has 4 GB; the first 3 GB are modelled).
+  * Display/backlight registers preset to the values wave-os v0.6.2 measured on the real machine.
   * ramoops exactly as ChromeOS uses it on hana (1 MB at 0xb1f00000), NOT in the device tree (as on the real one).
   * MediaTek peripherals at their real addresses: watchdog, display (MMSYS/OVL/RDMA/DSI),
     display PWM, GPIO. Every access is logged.
@@ -22,10 +23,10 @@ import argparse, os, struct, subprocess, sys, tempfile, zlib
 from unicorn import Uc, UcError, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_INTR, UC_HOOK_MEM_UNMAPPED, UC_HOOK_INSN
 from unicorn.arm64_const import *
 
-RAM_BASE, RAM_SIZE = 0x40000000, 0x80000000          # 2 GB, as in the hana device tree
+RAM_BASE, RAM_SIZE = 0x40000000, 0xc0000000          # first 3 GB of the real 4 GB
 TIMER_HZ = 13_000_000                                # MT8173 system counter
-DT_ADDR = 0x4a000000                                 # where our fake firmware puts the device tree
-FB_ADDR = 0x7d000000                                 # GUESS: framebuffer the firmware drew on
+DT_ADDR = 0x5ff00000                                 # real: x0 seen by wave-os v0.6.2 on hana
+FB_ADDR = 0xfdaff000                                 # real: OVL0 layer 0 address on hana
 FB_W, FB_H = 1366, 768                               # hana panel
 CB_TABLE = 0x7cff0000                                # GUESS: coreboot table location
 RAMOOPS = dict(base=0xb1f00000, size=0x100000, record=0x20000, console=0x20000, pmsg=0x20000)  # real: ChromeOS /sys/module/ramoops/parameters on hana
@@ -117,24 +118,47 @@ class Machine:
         except UcError:
             self.has_mrs_hook = False
 
-    # --- what the firmware left the display looking like (GUESS: one ARGB8888 layer on OVL0)
+    # --- what the firmware leaves, as measured by wave-os v0.6.2 on the real hana
     def _preset_display(self):
         r = self.regs
-        r[('mmsys', 0x100)] = 0                      # MMSYS_CG_CON0: all display clocks on
-        r[('mmsys', 0x110)] = 0
+        r[('mmsys', 0x100)] = 0x7f7a7ffc             # MMSYS_CG_CON0 (1 = clock gated): OVL0, RDMA0, COLOR0, OD on
+        r[('mmsys', 0x110)] = 0xffffffcf             # MMSYS_CG_CON1: only DSI0 clocks on (PWM clocks gated)
+        for ovl in (0xc000, 0xd000):
+            for n in range(1, 4):
+                r[('mmsys', ovl + 0x30 + 0x20 * n)] = 0xff
         ovl0 = 0xc000
-        r[('mmsys', ovl0 + 0x0c)] = 1                # OVL_EN
-        r[('mmsys', ovl0 + 0x20)] = (FB_H << 16) | FB_W   # ROI size
+        r[('mmsys', ovl0 + 0x0c)] = 0                # OVL_EN = 0: the firmware stopped the overlay engine
+        r[('mmsys', ovl0 + 0x20)] = (FB_H << 16) | FB_W
         r[('mmsys', ovl0 + 0x2c)] = 1                # SRC_CON: layer 0 on
         r[('mmsys', ovl0 + 0x30)] = 2 << 12          # L0_CON: ARGB8888
         r[('mmsys', ovl0 + 0x38)] = (FB_H << 16) | FB_W
-        r[('mmsys', ovl0 + 0x44)] = FB_W * 4          # pitch
-        r[('mmsys', ovl0 + 0xf40)] = FB_ADDR         # L0 address
-        rdma0 = 0xe000
-        r[('mmsys', rdma0 + 0x10)] = 1               # RDMA engine on (direct link from OVL)
-        r[('mmsys', 0x1e000)] = 1                    # DISP_PWM0 enabled (backlight)
-        r[('gpio', 0x450)] = 1 << 15                 # GPIO95 (backlight enable) high
+        r[('mmsys', ovl0 + 0x44)] = FB_W * 4
+        r[('mmsys', ovl0 + 0xf40)] = FB_ADDR
+        r[('mmsys', 0xe000 + 0x10)] = 0x101; r[('mmsys', 0xe000 + 0x14)] = 0xb00556; r[('mmsys', 0xe000 + 0x18)] = 0x300
+        r[('mmsys', 0xf000 + 0x10)] = 0x100; r[('mmsys', 0xf000 + 0x14)] = 0xb00280; r[('mmsys', 0xf000 + 0x18)] = 0x1e0
+        r[('mmsys', 0x1b000 + 0x00)] = 1; r[('mmsys', 0x1b000 + 0x14)] = 1; r[('mmsys', 0x1b000 + 0x18)] = 0x3c   # DSI0 running
+        r[('gpio', 0x020)] = 0x281; r[('gpio', 0x420)] = 0x280; r[('gpio', 0x520)] = 0xfbe4   # pins 32-47: 32 low, 41 high
+        r[('gpio', 0x050)] = 0xb080; r[('gpio', 0x450)] = 0x3000; r[('gpio', 0x550)] = 0x7d04 # pins 80-95: 87, 95 low
+        r[('gpio', 0x710)] = 1 << 6                  # pin 87 in DISP_PWM0 mode (mode 1)
 
+    def pin(self, n):
+        port = (n >> 4) << 4
+        return (self.regs.get(('gpio', 0x400 + port), 0) >> (n & 15)) & 1
+    def pinmode(self, n):
+        return (self.regs.get(('gpio', 0x600 + (n // 5) * 0x10), 0) >> ((n % 5) * 3)) & 7
+
+    def panel_state(self):
+        """Is the panel lit and showing OVL0? Returns (lit, reasons-it-is-dark)."""
+        r, why = self.regs, []
+        if self.a.display == 'off': why.append('display powered off (scenario)')
+        if not self.pin(41): why.append('panel power GPIO41 low')
+        if not self.pin(32): why.append('backlight power GPIO32 low')
+        if not self.pin(95): why.append('backlight enable GPIO95 low')
+        pwm_on = self.pinmode(87) == 1 and r.get(('mmsys', 0x1e000), 0) & 1 and not (r.get(('mmsys', 0x110), 0) & 3)
+        gpio_high = self.pinmode(87) == 0 and self.pin(87)
+        if not (pwm_on or gpio_high): why.append('brightness pin 87 not driven (PWM off/clock-gated, or GPIO low)')
+        if not r.get(('mmsys', 0xc000 + 0x0c), 0) & 1: why.append('overlay engine OVL0_EN = 0')
+        return (not why), why
     BLOCKS = [(0x0000, 'mmsys_cfg'), (0xc000, 'ovl0'), (0xd000, 'ovl1'), (0xe000, 'rdma0'), (0xf000, 'rdma1'),
               (0x10000, 'rdma2'), (0x1b000, 'dsi0'), (0x1c000, 'dsi1'), (0x1d000, 'dpi0'), (0x1e000, 'disp_pwm0'),
               (0x1f000, 'disp_pwm1'), (0x20000, 'mutex')]
@@ -165,6 +189,13 @@ class Machine:
                 self._stop('FREEZE', 'write to %s while the display is powered off (bus hang)' % self._blockname(bank, off))
                 return
             self._mmio('W', bank, off, val)
+            if bank == 'gpio' and off < 0x600 and (off & 0xf) in (4, 8):
+                reg = off & ~0xf
+                cur = self.regs.get(('gpio', reg), 0)
+                self.regs[('gpio', reg)] = (cur | val) if (off & 0xf) == 4 else (cur & ~val)
+                if 0x400 <= reg < 0x500:
+                    self.regs[('gpio', reg + 0x100)] = self.regs[('gpio', reg)]
+                return
             self.regs[(bank, off)] = val
             if bank == 'wdt':
                 self._wdt_write(off, val)
@@ -289,7 +320,7 @@ class Machine:
         pitch = self.regs.get(('mmsys', ovl + 0x44), 0) & 0xffff
         on = self.regs.get(('mmsys', ovl + 0x2c), 0) & 1
         w, h = size & 0x1fff, (size >> 16) & 0x1fff
-        if self.a.display == 'off' or not on or not (RAM_BASE <= addr < RAM_BASE + RAM_SIZE) or not w or not h:
+        if not on or not (RAM_BASE <= addr < RAM_BASE + RAM_SIZE) or not w or not h:
             return False
         raw = bytes(self.uc.mem_read(addr, pitch * h))
         rows = bytearray()
@@ -363,10 +394,13 @@ def main():
             print('  | ' + line)
 
     print('\n== screen')
-    if m.screen_png(a.png):
-        print('  saved what the panel shows to %s' % a.png)
+    lit, why = m.panel_state()
+    if lit and m.screen_png(a.png):
+        print('  panel is LIT; saved what it shows to %s' % a.png)
     else:
-        print('  panel is dark (display off, or no active layer)')
+        print('  panel is DARK: ' + '; '.join(why or ['no active layer']))
+        if m.screen_png(a.png):
+            print('  (what is in the screen buffer anyway: %s)' % a.png)
     return 0
 
 if __name__ == '__main__':

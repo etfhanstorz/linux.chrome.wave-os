@@ -60,9 +60,10 @@ static void fill(const struct fb *f, u32 rgb) {
 
 #include "rlog.h"
 #include "console.h"
-#define VERSION "wave-os v0.6.2"
+#define VERSION "wave-os v0.7"
 #include "sys.h"
 #include "probe.h"
+#include "display.h"
 #include "shell.h"
 #ifdef QEMU
 #include "qemu_ramfb.h"
@@ -140,25 +141,43 @@ void main(const u8 *dtb) {
         puts("screen: none found\n");
     }
 
-    // Riskier reads last: blocks that may be powered off (a freeze here only cuts the log short)
+    // Register dumps go to the log only (scrolling the screen is slow with caches off)
+    int screen = con_on;
+    con_on = 0;
     static const u32 mmsys_regs[] = {0x100, 0x110};
     static const u32 rdma_regs[] = {0x10, 0x14, 0x18, 0x24, 0x2c, 0xf00};
     static const u32 dsi_regs[] = {0x00, 0x04, 0x14, 0x18};
     static const u32 pwm_regs[] = {0x00, 0x08, 0x10, 0x14};
-    static const u32 gpio_regs[] = {0x020, 0x420, 0x520, 0x050, 0x450, 0x550};   // dir/dout/din for pins 32-47, 80-95
+    // dir/dout/din for pins 32-47 (32 backlight power, 41 panel power), 80-95 (87 brightness, 95 backlight
+    // enable), 112-127 (115/127 eDP bridge reset/power-down); pinmux for pins 85-89
+    static const u32 gpio_regs[] = {0x020, 0x420, 0x520, 0x050, 0x450, 0x550, 0x070, 0x470, 0x570, 0x710};
+    static const u32 ovl_en[] = {0x0c};
     dump("mmsys", 0x14000000UL, mmsys_regs, 2);
     dump("rdma0", 0x1400e000UL, rdma_regs, 6);
     dump("rdma1", 0x1400f000UL, rdma_regs, 6);
-    dump("gpio", 0x10005000UL, gpio_regs, 6);
+    dump("gpio", 0x10005000UL, gpio_regs, 10);
     dump("disp_pwm0", 0x1401e000UL, pwm_regs, 4);
     dump("dsi0", 0x1401b000UL, dsi_regs, 4);
-    puts("log end ok\n");
-    (void)have_log;
 
 #ifndef QEMU
-    puts("rebooting in 15 s. Then: Ctrl+D, and read /sys/fs/pstore/console-ramoops-0\n");
+    puts("turning on backlight (GPIO32, pin87, GPIO95) and overlay engine (OVL0_EN)\n");
+    display_on();
+    puts("after:\n");
+    dump("ovl0", 0x1400c000UL, ovl_en, 1);
+    dump("gpio", 0x10005000UL, gpio_regs, 10);
+#endif
+    puts("log end ok\n");
+    (void)have_log;
+    con_on = screen;
+
+#ifndef QEMU
+    if (con_on) {
+        con_fg = 0x40FF40;
+        puts("\n\nIf you can read this, wave-os drives the real screen!\n");
+        puts("Rebooting in 20 s. Then Ctrl+D and read /sys/fs/pstore/console-ramoops-0\n");
+    }
     wdt_kick();
-    delay_s(15);
+    delay_s(20);
     reboot();
 #else
     puts("type help (typing goes in the Ubuntu terminal)\n\n");
