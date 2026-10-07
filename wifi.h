@@ -345,6 +345,8 @@ static int wifi_fw(void) {
     if ((v = fn1_rd(0x01)) < 0 || fn1_wr(0x01, (u32)v | 0xff)) goto bad; // interrupt status: reset on read
     if ((v = fn1_rd(0xcc)) < 0 || fn1_wr(0xcc, (u32)v | 0x10)) goto bad; // ready bits auto re-enable
     if ((v = fn1_rd(0xcd)) < 0 || fn1_wr(0xcd, (u32)v | 1)) goto bad;   // CMD53 new mode
+    if (fn1_wr(0x02, 0xc3)) goto bad;                                    // host interrupt mask: data up/down + command port up/down (Linux host_int_enable)
+    { int ien = sdio_read_byte(0, 0x04); if (ien < 0 || sdio_write_byte(0, 0x04, (u32)ien | 0x03)) goto bad; }   // SDIO interrupt enable: master + function 1
     if ((v = fn1_rd(0xb8)) < 0 || fn1_wr(0xb8, (u32)v | 4)) goto bad;   // cmd port: read length from register
     if ((v = fn1_rd(0xb9)) < 0 || fn1_wr(0xb9, (u32)v | 1)) goto bad;   // cmd port: auto reset
     // Like Linux (mwifiex_dnld_fw): if the chip's firmware is already running there is nothing to upload.
@@ -469,7 +471,11 @@ static int wifi_cmd(u32 cmd, const u8 *body, u32 blen, u8 *resp, u32 rmax, u32 *
             for (u32 i = 0; i < body_len && i < rmax; i++) resp[i] = wbuf[12 + i];
             return (int)get16(wbuf + 10);
         }
-        if (hz && ticks() - t0 > hz) return -2;                    // 1 s
+        if (hz && ticks() - t0 > hz) {                             // 1 s
+            puts("  no answer. status 0x03 = "); put_hex((u32)st); puts(", mask 0x02 = "); put_hex((u32)fn1_rd(0x02));
+            puts(", 0x50 = "); put_hex((u32)fn1_rd(0x50)); puts(", cmd length 0xb4/5 = "); put_hex((u32)fn1_rd(0xb4)); puts("/"); put_hex((u32)fn1_rd(0xb5)); putc('\n');
+            return -2;
+        }
         delay_us(500);
     }
 }

@@ -77,9 +77,11 @@ class FakeFirmwareLoader:
         self.last = None
         self.stats = dict(writes=0, bytes=0, bad=0)
         self.cfg = {0xcd: 0, 0xb8: 0, 0xb9: 0, 0x01: 0, 0xcc: 0}
+        self.mask = 0                    # reg 0x02: host interrupt mask (MODEL: status bits only show when unmasked, as in Linux mwifiex)
         self.int_status = 0              # reg 0x03: bit 6 = a packet waits on the command port
         self.cmd_resp = b''
         self.cmds = []                   # host commands seen: (command, result)
+        self.mask = 0                    # reg 0x02: host interrupt mask (MODEL: status bits only show when unmasked, as in Linux mwifiex)
         self.int_status = 0              # reg 0x03: bit 6 = a packet waits on the command port\n        self.cmd_resp = b''\n        self.cmds = []                   # host commands seen: (command, result)\n        self.acked = False              # MODEL: the ROM signals "download ready" only after the host
                                         # acknowledged its boot interrupt (read 0x03), set reset-on-read
                                         # (0x01) and auto re-enable (0xcc bit 4), as Linux mwifiex does.
@@ -121,7 +123,9 @@ class FakeFirmwareLoader:
         if r == 0x03:
             self.acked = True                            # reading the status register acknowledges the boot interrupt
             v, self.int_status = (self.int_status or 0x01), 0    # reset on read
-            return v
+            return v if self.mask & 0x40 or v == 0x01 else 0
+        if r == 0x02:
+            return self.mask
         if r in (0xb4, 0xb5):
             return (len(self.cmd_resp) >> (8 * (r - 0xb4))) & 0xff
         if r == 0x50:
@@ -138,6 +142,8 @@ class FakeFirmwareLoader:
         return self.cfg.get(r, 0)
 
     def write_reg(self, r, v):
+        if r == 0x02:
+            self.mask = v
         if r in self.cfg:
             self.cfg[r] = v
 
