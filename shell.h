@@ -24,7 +24,7 @@ static void run_cmd(char *line) {
     while (*arg && *arg != ' ') arg++;
     if (*arg) { *arg++ = 0; while (*arg == ' ') arg++; }
     if (!*line) return;
-    if (streq(line, "help")) outs("commands: help version info echo color clear errors wifi wifion wififw reboot\n");
+    if (streq(line, "help")) outs("commands: help version info echo color clear errors wifi wifion wififw wifiinit reboot\n");
     else if (streq(line, "version")) outs(VERSION "\n");
     else if (streq(line, "info")) cmd_info();
     else if (streq(line, "echo")) { outs(arg); out('\n'); }
@@ -33,6 +33,7 @@ static void run_cmd(char *line) {
     else if (streq(line, "wifi")) wifi_probe();
     else if (streq(line, "wifion")) wifi_on();
     else if (streq(line, "wififw")) wifi_fw();
+    else if (streq(line, "wifiinit")) wifi_init();
     else if (streq(line, "reboot")) { outs("rebooting\n"); reboot(); }
     else if (streq(line, "color")) {
         if (streq(arg, "white")) con_fg = 0xFFFFFF;

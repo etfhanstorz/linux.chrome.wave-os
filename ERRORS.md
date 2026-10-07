@@ -65,3 +65,7 @@ the EC sent back (`EC_RES_*` in Linux `cros_ec_commands.h`).
 | **WIFI-09.4** | Firmware upload: too many "resend" requests from the chip | |
 | **WIFI-10** | Firmware upload: the chip asked for an impossible length | |
 | **WIFI-11** | Firmware uploaded but did not report ready (status 0xfedc) | The status value is printed above |
+| **WIFI-12.1** | Could not send a command to the Wi-Fi firmware (data write failed) | |
+| **WIFI-12.2** | The Wi-Fi firmware did not answer a command within 1 s | |
+| **WIFI-12.3** | The firmware's answer was not understood (wrong length, type or command) | |
+| **WIFI-13.1** | The Wi-Fi firmware rejected a command (an error number is printed above) | |

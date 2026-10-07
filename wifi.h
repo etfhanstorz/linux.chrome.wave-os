@@ -293,6 +293,39 @@ static int sdio_write_port(u32 addr, const u8 *data, u32 blocks) {
     return ((r >> 8) & 0xcb) ? 100 : 0;
 }
 
+#define MSDC_RXDATA 0x1c
+
+// CMD53 block read from function 1, fixed address. len = blocks * 256 bytes into out. Returns 0 or error.
+static int sdio_read_port(u32 addr, u8 *out, u32 blocks) {
+    u32 len = blocks * 256, got = 0;
+    for (int i = 0; i < 100000 && (msdc_rd(SDC_STS) & 3); i++) ;
+    msdc_wr(MSDC_FIFOCS, msdc_rd(MSDC_FIFOCS) | (1u << 31));
+    for (int i = 0; i < 100000 && (msdc_rd(MSDC_FIFOCS) & (1u << 31)); i++) ;
+    msdc_wr(MSDC_INT, msdc_rd(MSDC_INT));
+    msdc_wr(SDC_BLK_NUM, blocks);
+    u32 arg = (1u << 28) | (1u << 27) | (addr << 9) | (blocks & 0x1ff);      // read, function 1, block mode, fixed address
+    u32 raw = 53 | (RSP_R1 << 7) | (256u << 16) | (blocks > 1 ? (1u << 12) : (1u << 11));
+    msdc_wr(SDC_ARG, arg);
+    msdc_wr(SDC_CMD, raw);
+    u32 st = 0;
+    u64 hz = tick_hz(), t0 = ticks();
+    for (;;) {
+        u32 cnt = msdc_rd(MSDC_FIFOCS) & 0xff;                               // bytes waiting in the RX FIFO
+        while (cnt >= 4 && got < len) {
+            u32 w = msdc_rd(MSDC_RXDATA);
+            out[got] = w; out[got + 1] = w >> 8; out[got + 2] = w >> 16; out[got + 3] = w >> 24;
+            got += 4; cnt -= 4;
+        }
+        st = msdc_rd(MSDC_INT);
+        if (st & (INT_CMDTMO | INT_RSPCRC | INT_DATTMO | INT_DATCRC)) break;
+        if ((st & INT_XFER_COMPL) && got >= len) break;
+        if (hz && ticks() - t0 > hz / 2) { st |= INT_DATTMO; break; }
+    }
+    msdc_wr(MSDC_INT, st);
+    if (st & (INT_CMDTMO | INT_RSPCRC | INT_DATTMO | INT_DATCRC)) return 1 + (int)((st >> 9) & 0x7f);
+    return 0;
+}
+
 static int fn1_rd(u32 reg) { return sdio_read_byte(1, reg); }
 static int fn1_wr(u32 reg, u32 v) { return sdio_write_byte(1, reg, v); }
 
@@ -391,6 +424,87 @@ static int wifi_fw(void) {
 bad:
     errs("WIFI", 6, 6, "SDIO register read (CMD52) failed");
     return 0;
+}
+
+// ---- v1.8: host commands to the running Wi-Fi firmware (Linux mwifiex cmdevt + sdio command port) ----
+// Packet = 4-byte SDIO header {u16 length, u16 type: 1 command, 3 event} + command header
+// {u16 command, u16 size, u16 sequence, u16 result} + body. Responses come back as command|0x8000.
+// New-mode command port = MEM_PORT | CMD_PORT_SLCT = 0x18000, fixed address, block mode.
+#define WCMD_PORT 0x18000
+#define UP_LD_CMD_PORT_INT 0x40
+static u8 wbuf[2312 + 256 + 256];
+static u16 wifi_seq;
+
+static void put16(u8 *p, u32 v) { p[0] = v; p[1] = v >> 8; }
+static u32 get16(const u8 *p) { return p[0] | (p[1] << 8); }
+
+// Send host command `cmd` with `blen` body bytes; copy up to rmax response body bytes to resp.
+// Returns the firmware result (0 = ok, >0 firmware error) or a negative wave-os error: -1 send failed,
+// -2 no response, -3 malformed response.
+static int wifi_cmd(u32 cmd, const u8 *body, u32 blen, u8 *resp, u32 rmax, u32 *rlen) {
+    u32 total = 4 + 8 + blen;
+    if (total > 2312) return -1;
+    for (u32 i = 0; i < 256 * ((total + 255) / 256); i++) wbuf[i] = 0;
+    put16(wbuf, total); put16(wbuf + 2, 1);                       // SDIO header: length, type = command
+    put16(wbuf + 4, cmd); put16(wbuf + 6, 8 + blen); put16(wbuf + 8, ++wifi_seq); put16(wbuf + 10, 0);
+    for (u32 i = 0; i < blen; i++) wbuf[12 + i] = body[i];
+    fn1_rd(0x03);                                                  // clear stale interrupt bits (reset on read)
+    if (sdio_write_port(WCMD_PORT, wbuf, (total + 255) / 256)) return -1;
+    u64 hz = tick_hz(), t0 = ticks();
+    for (;;) {
+        int st = fn1_rd(0x03);                                     // host interrupt status
+        if (st >= 0 && (st & UP_LD_CMD_PORT_INT)) {
+            int l0 = fn1_rd(0xb4), l1 = fn1_rd(0xb5);              // length of the waiting packet
+            if (l0 < 0 || l1 < 0) return -2;
+            u32 rx = ((u32)l1 << 8) | (u32)l0;
+            u32 blocks = (rx + 255) / 256;
+            if (rx <= 4 || blocks * 256 > sizeof wbuf) return -3;
+            if (sdio_read_port(WCMD_PORT, wbuf, blocks)) return -3;
+            u32 type = get16(wbuf + 2);
+            if (type == 3) continue;                               // an event, not our answer: keep waiting
+            if (type != 1 || (get16(wbuf + 4) & 0x7fff) != cmd) return -3;
+            u32 size = get16(wbuf + 6);
+            u32 body_len = size > 8 ? size - 8 : 0;
+            if (rlen) *rlen = body_len;
+            for (u32 i = 0; i < body_len && i < rmax; i++) resp[i] = wbuf[12 + i];
+            return (int)get16(wbuf + 10);
+        }
+        if (hz && ticks() - t0 > hz) return -2;                    // 1 s
+        delay_us(500);
+    }
+}
+
+static void put_mac(const u8 *m) {
+    for (u32 i = 0; i < 6; i++) { putc("0123456789abcdef"[m[i] >> 4]); putc("0123456789abcdef"[m[i] & 15]); if (i < 5) putc(':'); }
+}
+
+static int wifi_cmd_err(const char *name, int r, u32 sub_base) {
+    (void)sub_base;
+    if (r == 0) return 1;
+    puts("  command "); puts(name); puts(": ");
+    if (r > 0) { puts("firmware answered with error "); put_dec((u64)r); putc('\n'); errs("WIFI", 13, 1, "Wi-Fi firmware rejected a command"); }
+    else if (r == -1) { puts("send failed\n"); errs("WIFI", 12, 1, "could not send a command to the Wi-Fi firmware"); }
+    else if (r == -2) { puts("no answer within 1 s\n"); errs("WIFI", 12, 2, "the Wi-Fi firmware did not answer a command"); }
+    else { puts("malformed answer\n"); errs("WIFI", 12, 3, "the Wi-Fi firmware's answer was not understood"); }
+    return 0;
+}
+
+// Wi-Fi step: make sure the chip is up, then run the firmware's init commands and print its MAC address.
+static u8 wifi_mac[6];
+static int wifi_init(void) {
+    if (!wifi_fw()) return 0;
+    u8 r[96]; u32 n = 0;
+    puts("talking to the Wi-Fi firmware...\n");
+    if (!wifi_cmd_err("FUNC_INIT", wifi_cmd(0x00a9, 0, 0, r, sizeof r, &n), 0)) return 0;
+    static const u8 zero[63];                                      // GET_HW_SPEC request: all-zero spec
+    if (!wifi_cmd_err("GET_HW_SPEC", wifi_cmd(0x0003, zero, sizeof zero, r, sizeof r, &n), 0)) return 0;
+    if (n < 22) { errs("WIFI", 12, 3, "the Wi-Fi firmware's answer was not understood"); return 0; }
+    for (u32 i = 0; i < 6; i++) wifi_mac[i] = r[8 + i];
+    u32 fwver = r[18] | (r[19] << 8) | ((u32)r[20] << 16) | ((u32)r[21] << 24);   // hw spec: mac at 8, region 14, antennas 16, release 18
+    puts("  Wi-Fi MAC address "); put_mac(wifi_mac); putc('\n');
+    puts("  firmware release "); put_hex(fwver); puts(", antennas "); put_dec(get16(r + 16)); puts(", region "); put_hex(get16(r + 14)); putc('\n');
+    puts("  the Wi-Fi firmware answers our commands.\n");
+    return 1;
 }
 
 static void wifi_probe(void) {

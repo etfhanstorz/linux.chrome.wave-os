@@ -77,7 +77,10 @@ class FakeFirmwareLoader:
         self.last = None
         self.stats = dict(writes=0, bytes=0, bad=0)
         self.cfg = {0xcd: 0, 0xb8: 0, 0xb9: 0, 0x01: 0, 0xcc: 0}
-        self.acked = False              # MODEL: the ROM signals "download ready" only after the host
+        self.int_status = 0              # reg 0x03: bit 6 = a packet waits on the command port
+        self.cmd_resp = b''
+        self.cmds = []                   # host commands seen: (command, result)
+        self.int_status = 0              # reg 0x03: bit 6 = a packet waits on the command port\n        self.cmd_resp = b''\n        self.cmds = []                   # host commands seen: (command, result)\n        self.acked = False              # MODEL: the ROM signals "download ready" only after the host
                                         # acknowledged its boot interrupt (read 0x03), set reset-on-read
                                         # (0x01) and auto re-enable (0xcc bit 4), as Linux mwifiex does.
                                         # (v1.5 skipped these on the real hana: WIFI-09, chip stopped asking.)
@@ -91,10 +94,36 @@ class FakeFirmwareLoader:
         n = self.chunks[self.i] if self.i < len(self.chunks) else 2312
         return min(n, len(self.fw) - self.pos)
 
+    def host_command(self, d):
+        import struct
+        total, typ = struct.unpack_from('<HH', d, 0)
+        cmd, size, seq, _ = struct.unpack_from('<HHHH', d, 4)
+        body = b''
+        result = 0
+        if cmd == 0x00a9:                                # FUNC_INIT
+            body = b''
+        elif cmd == 0x0003:                              # GET_HW_SPEC
+            body = struct.pack('<HHHH6sHHI', 0x0001, 0x0067, 0, 32, bytes.fromhex('0050431a2b3c'), 0x10, 2, 0x0f444c11).ljust(63, b'\0')
+        else:
+            result = 1
+        resp = struct.pack('<HHHHHH', 12 + len(body), 1, cmd | 0x8000, 8 + len(body), seq, result) + body
+        self.cmds.append((cmd, result))
+        self.cmd_resp = resp
+        self.int_status = 0x40
+
+    def port_read(self, addr, nbytes):
+        if addr == 0x18000 and self.cmd_resp:
+            r, self.cmd_resp = self.cmd_resp, b''
+            return r.ljust(nbytes, b'\0')[:nbytes]
+        return bytes(nbytes)
+
     def reg(self, r):
         if r == 0x03:
             self.acked = True                            # reading the status register acknowledges the boot interrupt
-            return 0x01
+            v, self.int_status = (self.int_status or 0x01), 0    # reset on read
+            return v
+        if r in (0xb4, 0xb5):
+            return (len(self.cmd_resp) >> (8 * (r - 0xb4))) & 0xff
         if r == 0x50:
             if self.running:
                 return 0x08                              # running firmware never asks for a download
@@ -112,8 +141,11 @@ class FakeFirmwareLoader:
         if r in self.cfg:
             self.cfg[r] = v
 
-    def port_write(self, data):
+    def port_write(self, data, addr=0x10000):
         """A CMD53 block write to the memory port: must be exactly what the ROM asked for."""
+        if addr == 0x18000:                              # command port of the running firmware
+            self.host_command(data)
+            return
         n = self.want()
         self.stats['writes'] += 1
         if not (self.cfg[0xcd] & 1) or len(data) < n:
@@ -134,6 +166,7 @@ class FakeMSDC:
         self.commands = []         # (opcode, answered)
         self.loader = FakeFirmwareLoader(firmware, fw_running) if firmware else None
         self.card.loader = self.loader
+        self.rx = []               # bytes waiting in the RX FIFO (CMD53 reads)
         self.tx = []               # bytes written to the TX FIFO for the current data command
         self.want_bytes = 0
         self.port_cmd = None
@@ -150,7 +183,12 @@ class FakeMSDC:
         if off == 0x00:
             v |= 1 << 7                               # CKSTB: clock stable
         if off == 0x14:
-            v = 0                                     # FIFO drains instantly: TXCNT/RXCNT 0
+            v = min(len(self.rx), 128)                # RXCNT; TX FIFO drains instantly (TXCNT 0)
+        if off == 0x1c:                               # MSDC_RXDATA: pop a word
+            w = 0
+            for j in range(4):
+                w |= (self.rx.pop(0) if self.rx else 0) << (8 * j)
+            return w
         return v
 
     def write(self, off, val):
@@ -169,12 +207,19 @@ class FakeMSDC:
             self.tx += [(val >> (8 * j)) & 0xff for j in range(4)]
             if self.port_cmd and len(self.tx) >= self.want_bytes:
                 if self.card.loader:
-                    self.card.loader.port_write(bytes(self.tx[:self.want_bytes]))
+                    self.card.loader.port_write(bytes(self.tx[:self.want_bytes]), self.port_cmd)
                 r[('msdc3', 0x0c)] = r.get(('msdc3', 0x0c), 0) | (1 << 12)     # XFER_COMPL
                 self.port_cmd = None
             return True
         if off == 0x34:                               # SDC_CMD: run the command now
             op, arg = val & 0x3f, r.get(('msdc3', 0x38), 0)
+            if op == 53 and not (val >> 13) & 1 and self.powered() and self.card.loader:   # CMD53 read
+                n = ((val >> 16) & 0xfff) * r.get(('msdc3', 0x50), 1)
+                self.rx = list(self.card.loader.port_read((arg >> 9) & 0x1ffff, n))
+                self.commands.append((op, True))
+                r[('msdc3', 0x40)] = 0x1000
+                r[('msdc3', 0x0c)] = r.get(('msdc3', 0x0c), 0) | (1 << 8) | (1 << 12)   # CMDRDY + XFER_COMPL
+                return True
             if op == 53 and (val >> 13) & 1 and self.powered():      # CMD53 write: data follows through the FIFO
                 self.tx = []
                 self.want_bytes = ((val >> 16) & 0xfff) * r.get(('msdc3', 0x50), 1)

@@ -490,6 +490,8 @@ def main():
         print('  Wi-Fi firmware upload: %d block writes, %d of %d bytes accepted, %d rejected, chip status %s'
               % (s['writes'], m.msdc.loader.pos, len(m.msdc.loader.fw), s['bad'],
                  'RUNNING (0xfedc)' if m.msdc.loader.pos >= len(m.msdc.loader.fw) else 'waiting'))
+    if m.msdc.loader and m.msdc.loader.cmds:
+        print('  Wi-Fi firmware commands: ' + ', '.join('%#06x%s' % (cmd, '' if res == 0 else ' (result %d)' % res) for cmd, res in m.msdc.loader.cmds))
     if m.keys:
         print('  keys typed: %r (done at fake %.1f s)' % (a.keys, m.keys.end_s))
 
