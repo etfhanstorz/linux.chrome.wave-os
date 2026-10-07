@@ -568,7 +568,7 @@ static int wifi_scan(void) {
     if (!wifi_ready && !wifi_init()) return 0;
     u8 r[8];
     u32 n = 0;
-    static const u8 macctl[6] = {0x03, 0x00, 0x00, 0x00, 0x00, 0x00};   // MAC_CONTROL: receive + transmit on
+    static const u8 macctl[6] = {0x13, 0x00, 0x00, 0x00, 0x00, 0x00};   // MAC_CONTROL: receive + transmit + Ethernet-II (Linux default packet filter)
     int rc = wifi_cmd(0x0028, macctl, sizeof macctl, r, sizeof r, &n);
     if (rc > 0) puts("  (MAC_CONTROL rejected; continuing)\n");
     // scan command: mode "any", BSSID 0, wildcard SSID, channel list
@@ -585,7 +585,7 @@ static int wifi_scan(void) {
         int fiveg = i >= sizeof ch24;
         body[p] = fiveg ? 1 : 0;                                    // radio type: 0 = 2.4 GHz, 1 = 5 GHz
         body[p + 1] = fiveg ? ch5[i - sizeof ch24] : ch24[i];
-        body[p + 2] = 0;                                            // active scan
+        body[p + 2] = 0x02;                                         // active scan, channel filter disabled (Linux MWIFIEX_DISABLE_CHAN_FILT)
         put16(body + p + 3, 0); put16(body + p + 5 - 1 + 1, 110);   // min 0, max 110 ms per channel
         p += 6;
     }

@@ -122,6 +122,19 @@ class FakeFirmwareLoader:
         elif cmd == 0x0006:                              # legacy SCAN: a few invented access points
             aps = [(b'HomeNet', '02:11:22:33:44:01', 52, 6, True), (b'CoffeeShop-Guest', '02:11:22:33:44:02', 71, 1, False),
                    (b'Neighbour5G', '02:11:22:33:44:03', 80, 149, True), (b'', '02:11:22:33:44:04', 85, 11, True)]
+            # MODEL (real hana, v1.11): without the 'disable channel filter' bit (0x02) on the channels, the firmware's
+            # regulatory filter drops everything and the scan finds nothing (but returns no error).
+            filt_off = False
+            p = 12 + 7
+            while p + 4 <= len(d):
+                ttype, tlen = struct.unpack_from('<HH', d, p)
+                if ttype == 0x0101:
+                    chans = [d[p + 4 + k * 6 + 2] for k in range(tlen // 6)]
+                    filt_off = bool(chans) and all(m & 2 for m in chans)
+                    break
+                p += 4 + tlen
+            if not filt_off:
+                aps = []
             recs = b''
             for ssid, mac, rssi, ch, sec in aps:
                 ies = bytes([0, len(ssid)]) + ssid + bytes([3, 1, ch]) + (bytes([48, 4, 1, 0, 0, 0]) if sec else b'')
