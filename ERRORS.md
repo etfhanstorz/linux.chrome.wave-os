@@ -26,6 +26,12 @@ watchdog rebooted the machine (that wipes RAM) -- or it never started (check the
 | **KB-09** | Reply checksum wrong | Noise on the bus, or misaligned FIFO reads |
 | **KB-10** | Request too long (wave-os bug) | |
 | **WIFI-01** | PMIC wrapper did not answer: can't read the Wi-Fi bus supply (VGP3) | Wrapper busy or not initialised by the firmware |
+| **WIFI-02** | Wi-Fi bus supply VGP3 did not switch on at 3.3 V (read-back mismatch) | PMIC write not taking effect |
+| **WIFI-03** | Wi-Fi chip did not answer CMD5 (SDIO "what voltage?") | Chip unpowered (GPIO85), bus supply off, or bus/clock problem |
+| **WIFI-04** | Chip never became ready (CMD5 busy for 1 s) | Voltage window refused |
+| **WIFI-05** | Chip did not take an address (CMD3) or could not be selected (CMD7) | |
+| **WIFI-06** | SDIO register read (CMD52) failed | |
+| **WIFI-07** | Unexpected SDIO vendor/device ID (not a Marvell 88W8897) | Different Wi-Fi chip in this unit? |
 | **EC-01** | EC: invalid command (this EC does not know the command) | |
 | **EC-02** | EC: error | |
 | **EC-03** | EC: invalid parameter | |

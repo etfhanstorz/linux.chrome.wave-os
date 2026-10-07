@@ -23,6 +23,7 @@ import argparse, os, struct, subprocess, sys, tempfile, zlib
 from unicorn import Uc, UcError, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_INTR, UC_HOOK_MEM_UNMAPPED, UC_HOOK_INSN
 from unicorn.arm64_const import *
 from fakeec import FakeEC, FakeSPI, KeyScript
+from fakesdio import FakeMSDC
 
 RAM_BASE, RAM_SIZE = 0x40000000, 0xc0000000          # first 3 GB of the real 4 GB
 TIMER_HZ = 13_000_000                                # MT8173 system counter
@@ -111,13 +112,21 @@ class Machine:
         self._map('gpio', 0x10005000, 0x1000)
         self._map('wdt', 0x10007000, 0x1000)
         self._map('mmsys', 0x14000000, 0x21000)       # MMSYS config + OVL/RDMA/DSI/PWM/MUTEX blocks
-        # Wi-Fi dependencies (GUESSES until wave-os v0.10 measures the real machine)
+        # Wi-Fi dependencies, preset to what wave-os v0.10 measured on the real hana
         self._map('pericfg', 0x10003000, 0x1000)      # clock gates
-        self._map('pwrap', 0x1000d000, 0x1000)        # PMIC wrapper -> fake MT6397
+        self._map('pwrap', 0x1000d000, 0x1000)        # PMIC wrapper -> fake MT6391/MT6397
         self._map('msdc3', 0x11260000, 0x1000)        # SDIO controller for the Marvell 88W8897
-        self.regs[('pericfg', 0x18)] = 1 << 16        # PERI0: MSDC30_3 clock gated
-        self.pmic = {0x0100: 0x0097, 0x041e: 0x0000, 0x043a: 3 << 5}   # CID; VGP3 off; VGP3 = 1.8 V
+        r = self.regs
+        r[('pericfg', 0x18)] = 1 << 28                # PERI0 gates: only bit 28 gated (MSDC3 clock on)
+        r[('msdc3', 0x00)] = 0x200099; r[('msdc3', 0x08)] = 0x810f0002; r[('msdc3', 0x30)] = 0x108000
+        r[('gpio', 0x640)] = (1 << 6) | (1 << 9) | (1 << 12)            # pins 22-24 in MSDC3 mode
+        r[('gpio', 0x650)] = 1 | (1 << 3) | (1 << 6)                    # pins 25-27 in MSDC3 mode
+        r[('gpio', 0x510)] = 0xbc0                    # din 16-31: dat0-3 high, clk low, cmd high
+        r[('gpio', 0x520)] = 0xfbe4 | (1 << 6)        # din 32-47: gpio38 (chip irq) high
+        r[('gpio', 0x710)] = 0x1249                   # pins 85-89 mode 1 (85 = audio data, not yet GPIO)
+        self.pmic = {0x0100: 0x2091, 0x041e: 0x0000, 0x043a: 0x00a1}   # CID; VGP3 off; VGP3 at 2.8 V
         self.pwrap_fsm, self.pwrap_data = 0, 0
+        self.msdc = FakeMSDC(self, self.regs)
         self.timer_hz = TIMER_HZ
         self.keys = KeyScript(args.keys.encode().decode('unicode_escape')) if args.keys else None
         self.ec = FakeEC(self, self.keys)
@@ -202,6 +211,10 @@ class Machine:
             if bank == 'msdc3' and self.regs.get(('pericfg', 0x18), 0) & (1 << 16):
                 self._stop('FREEZE', 'read of msdc3+%#x while its clock is gated (bus hang)' % off)
                 return 0
+            if bank == 'msdc3':
+                v = self.msdc.read(off)
+                self._mmio('R', bank, off, v)
+                return v
             if bank == 'pwrap' and off == 0xa4:              # WACS2_RDATA: fsm in bits 16-18, data in 0-15
                 v = (self.pwrap_fsm << 16) | self.pwrap_data
                 self._mmio('R', bank, off, v)
@@ -219,11 +232,15 @@ class Machine:
             if bank == 'msdc3' and self.regs.get(('pericfg', 0x18), 0) & (1 << 16):
                 self._stop('FREEZE', 'write to msdc3+%#x while its clock is gated (bus hang)' % off)
                 return
+            if bank == 'msdc3' and self.msdc.write(off, val):
+                return
             if bank == 'pwrap' and off == 0xa0:              # WACS2_CMD: bit31 write, adr>>1 in 16-30
                 adr = ((val >> 16) & 0x7fff) << 1
-                if val >> 31:
+                if val >> 31:                                # write: done, back to idle (Linux pwrap_write16)
                     self.pmic[adr] = val & 0xffff
-                self.pwrap_data, self.pwrap_fsm = self.pmic.get(adr, 0), 6   # wait-for-valid-clear
+                    self.pwrap_fsm = 0
+                else:                                        # read: data valid, wait for VLDCLR
+                    self.pwrap_data, self.pwrap_fsm = self.pmic.get(adr, 0), 6
                 return
             if bank == 'pwrap' and off == 0xa8:              # WACS2_VLDCLR
                 self.pwrap_fsm = 0
