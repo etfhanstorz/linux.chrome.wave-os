@@ -715,7 +715,7 @@ static int scan_band(u32 radio, const u8 *chans, u32 nch) {
     return 1;
 }
 
-static int wifi_scan(void) {
+static int wifi_scan(int with5) {
     if (!wifi_ready && !wifi_init()) return 0;
     u8 r[8]; u32 n = 0;
     static const u8 macctl[6] = {0x13, 0x00, 0x00, 0x00, 0x00, 0x00};   // MAC_CONTROL: receive + transmit + Ethernet-II (Linux default packet filter)
@@ -727,7 +727,7 @@ static int wifi_scan(void) {
     wifi_event_hook = scan_event;
     puts("scanning 2.4 GHz...\n");
     int ok = scan_band(0, ch24, sizeof ch24);
-    if (ok) {                                                       // 5 GHz in groups of 4 channels (Linux's default); a failure here must not hide the 2.4 GHz results
+    if (ok && with5) {                                              // 5 GHz (wifiscan5 only: it gets no answer on hana yet) in groups of 4 channels (Linux's default); a failure here must not hide the 2.4 GHz results
         for (u32 i = 0; i < sizeof ch5 && ok; i += 4) {
             u32 n5 = sizeof ch5 - i < 4 ? sizeof ch5 - i : 4;
             puts("scanning 5 GHz channels "); put_dec(ch5[i]); puts("...\n");
