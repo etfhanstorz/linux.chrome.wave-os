@@ -334,12 +334,63 @@ static int sdio_read_port1(u32 addr, u8 *out, u32 blocks) {
 // Multi-block PIO reads never complete on this controller (v1.20-v1.24: data timeout on every 7-block read, while
 // single-block reads always work). The port is a FIFO, so read a packet one 256-byte block at a time instead.
 static u32 rd_total;                     // bytes of the current packet that arrived before a failure
+static int wifi_read_bytes;              // 0 = read a packet as 256-byte blocks, 1 = in BYTE mode (up to 512 bytes per transfer)
+static u32 dbg_starts[8], dbg_blocks, dbg_taken;   // first 4 bytes of each 256-byte block of the first big packet (scan diagnostics)
+
+// CMD53 BYTE-mode read from function 1, fixed address: one transfer of len bytes (4..512, multiple of 4), no block counting.
+static int sdio_read_bytes_once(u32 addr, u8 *out, u32 len) {
+    u32 got = 0;
+    for (int i = 0; i < 100000 && (msdc_rd(SDC_STS) & 3); i++) ;
+    msdc_wr(MSDC_FIFOCS, msdc_rd(MSDC_FIFOCS) | (1u << 31));
+    for (int i = 0; i < 100000 && (msdc_rd(MSDC_FIFOCS) & (1u << 31)); i++) ;
+    msdc_wr(MSDC_INT, msdc_rd(MSDC_INT));
+    msdc_wr(SDC_BLK_NUM, 1);
+    u32 arg = (1u << 28) | (addr << 9) | (len & 0x1ff);                      // read, function 1, BYTE mode (bit 27 = 0), fixed address, count = len (512 -> 0)
+    u32 raw = 53 | (RSP_R1 << 7) | ((len & 0xfff) << 16) | (1u << 11);       // one "block" of len bytes
+    msdc_wr(SDC_ARG, arg);
+    msdc_wr(SDC_CMD, raw);
+    u32 st = 0;
+    u64 hz = tick_hz(), t0 = ticks();
+    for (;;) {
+        u32 cnt = msdc_rd(MSDC_FIFOCS) & 0xff;
+        while (cnt >= 4 && got < len) {
+            u32 w = msdc_rd(MSDC_RXDATA);
+            out[got] = w; out[got + 1] = w >> 8; out[got + 2] = w >> 16; out[got + 3] = w >> 24;
+            got += 4; cnt -= 4;
+        }
+        st = msdc_rd(MSDC_INT);
+        if (st & (INT_CMDTMO | INT_RSPCRC | INT_DATTMO | INT_DATCRC)) break;
+        if ((st & INT_XFER_COMPL) && got >= len) break;
+        if (hz && ticks() - t0 > hz / 2) { st |= INT_DATTMO; break; }
+    }
+    rd_got = got;
+    msdc_wr(MSDC_INT, st);
+    if (st & (INT_CMDTMO | INT_RSPCRC | INT_DATTMO | INT_DATCRC)) return 1 + (int)((st >> 9) & 0x7f);
+    return 0;
+}
+
+// Multi-block PIO reads never complete on this controller (v1.20+: data timeout on every 7-block read, while
+// single-block reads always work). So read a packet piece by piece instead: 256-byte blocks, or byte-mode transfers.
 static int sdio_read_port(u32 addr, u8 *out, u32 blocks) {
     rd_total = 0;
-    for (u32 b = 0; b < blocks; b++) {
-        int e = sdio_read_port1(addr, out + b * 256, 1);
-        if (e) return e;
-        rd_total += 256;
+    if (wifi_read_bytes) {
+        u32 len = blocks * 256;
+        for (u32 off = 0; off < len; off += 512) {
+            u32 n = len - off < 512 ? len - off : 512;
+            int e = sdio_read_bytes_once(addr, out + off, n);
+            if (e) return e;
+            rd_total += n;
+        }
+    } else {
+        for (u32 b = 0; b < blocks; b++) {
+            int e = sdio_read_port1(addr, out + b * 256, 1);
+            if (e) return e;
+            rd_total += 256;
+        }
+    }
+    if (blocks > 1 && !dbg_taken) {                                      // remember how each block begins (diagnostics)
+        dbg_taken = 1; dbg_blocks = blocks > 8 ? 8 : blocks;
+        for (u32 b = 0; b < dbg_blocks; b++) dbg_starts[b] = out[b * 256] | (out[b * 256 + 1] << 8) | ((u32)out[b * 256 + 2] << 16) | ((u32)out[b * 256 + 3] << 24);
     }
     return 0;
 }
@@ -722,6 +773,7 @@ static int scan_band(u32 radio, const u8 *chans, u32 nch) {
 }
 
 static int wifi_scan(int with5) {
+    puts(wifi_read_bytes ? "(reading packets in byte mode)\n" : "(reading packets in 256-byte blocks)\n");
     if (!wifi_ready && !wifi_init()) return 0;
     u8 r[8]; u32 n = 0;
     static const u8 macctl[6] = {0x13, 0x00, 0x00, 0x00, 0x00, 0x00};   // MAC_CONTROL: receive + transmit + Ethernet-II (Linux default packet filter)
@@ -729,7 +781,7 @@ static int wifi_scan(int with5) {
     if (rc > 0) puts("  (MAC_CONTROL rejected; continuing)\n");
     static const u8 ch24[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
     static const u8 ch5[] = {36, 40, 44, 48, 149, 153, 157, 161, 165};
-    nap = 0; scan_events = 0; scan_bytes = 0;
+    nap = 0; scan_events = 0; scan_bytes = 0; dbg_taken = 0;
     wifi_event_hook = scan_event;
     puts("scanning 2.4 GHz...\n");
     int ok = scan_band(0, ch24, sizeof ch24);
@@ -742,6 +794,7 @@ static int wifi_scan(int with5) {
     }
     wifi_event_hook = 0;
     if (!scan_events && !nap) return 0;                              // nothing at all: the error above says why
+    if (dbg_taken) { puts("first big packet, block starts:"); for (u32 b = 0; b < dbg_blocks; b++) { putc(' '); put_hex(dbg_starts[b]); } putc('\n'); }
     puts("scan events received: "); put_dec(scan_events); puts(" ("); put_dec(scan_bytes); puts(" bytes)\n");
     if (!scan_events) errs("WIFI", 14, 3, "the scan finished but the firmware sent no scan results");
     puts("found "); put_dec(nap); puts(" networks:\n");
