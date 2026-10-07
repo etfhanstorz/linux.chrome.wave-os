@@ -59,11 +59,12 @@ static void fill(const struct fb *f, u32 rgb) {
 }
 
 #include "console.h"
+#define VERSION "wave-os v0.3"
+#include "shell.h"
 #ifdef QEMU
 #include "qemu_ramfb.h"
 #endif
 
-#define VERSION "wave-os v0.2"
 
 void main(const u8 *dtb) {
     struct fb f;
@@ -81,5 +82,10 @@ void main(const u8 *dtb) {
     puts(" stride "); put_dec(f.stride); puts(" bpp "); put_dec(f.bpp); putc('\n');
     puts("console: "); put_dec(con_cols); putc('x'); put_dec(con_rows); puts(" chars\n\n");
     puts("boot ok.\n");
-    for (;;) __asm__ volatile("wfe");
+#ifdef QEMU
+    puts("type help (typing goes in the Ubuntu terminal)\n\n");
+#else
+    puts("keyboard: no driver for this hardware yet\n\n");
+#endif
+    shell();
 }

@@ -14,4 +14,4 @@ ${X}gcc -DQEMU -c -O2 -ffreestanding -fno-pic -mcmodel=tiny -mgeneral-regs-only 
 ${X}gcc -c start.S -o /tmp/q/start.o
 ${X}ld -T link.ld -nostdlib /tmp/q/start.o /tmp/q/main.o -o /tmp/q/k.elf
 ${X}objcopy -O binary /tmp/q/k.elf /tmp/q/Image
-qemu-system-aarch64 -M virt -cpu cortex-a72 -m 1G -kernel /tmp/q/Image -dtb /tmp/q/t.dtb -device ramfb -display gtk
+qemu-system-aarch64 -M virt -cpu cortex-a72 -m 1G -kernel /tmp/q/Image -dtb /tmp/q/t.dtb -device ramfb -display gtk -serial mon:stdio
