@@ -2,6 +2,25 @@
 # Run via flash.bat (asks for admin). Use -DryRun to only list what it would do.
 param([switch]$DryRun, [string]$Image = 'out.kpart')
 $ErrorActionPreference = 'Stop'
+
+# Not admin? Relaunch this script elevated, and report any failure in this (visible) window.
+$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $isAdmin -and -not $DryRun) {
+    $log = Join-Path $PSScriptRoot 'flash-launch.log'
+    try {
+        $args2 = @('-NoExit', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"", '-Image', $Image)
+        Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList $args2 -ErrorAction Stop
+        "$(Get-Date) launched elevated flasher for $Image" | Out-File $log
+        Write-Host "The admin flasher window should now be open. Continue there."
+    } catch {
+        "$(Get-Date) FAILED to launch elevated: $_" | Out-File $log
+        Write-Host "`nCould not open the admin window: $_" -ForegroundColor Red
+    }
+    exit 0
+}
+
+try { Start-Transcript -Path (Join-Path $PSScriptRoot 'flash.log') -Force | Out-Null } catch {}
+trap { Write-Host "`nERROR: $_" -ForegroundColor Red; Read-Host "`nPress Enter to close"; exit 1 }
 $kpart = Join-Path $PSScriptRoot $Image
 $KERNEL_GUID = 'FE3A2A5D-4F32-41A7-B725-ACCC3285A309'   # ChromeOS kernel partition type
 
