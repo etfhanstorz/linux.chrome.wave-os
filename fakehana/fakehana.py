@@ -242,6 +242,7 @@ class Machine:
                 if val >> 31:                                # write: done, back to idle (Linux pwrap_write16)
                     self.pmic[adr] = val & 0xffff
                     self.pwrap_fsm = 0
+                    self.msdc.update_power()
                 else:                                        # read: data valid, wait for VLDCLR
                     self.pwrap_data, self.pwrap_fsm = self.pmic.get(adr, 0), 6
                 return
@@ -258,6 +259,7 @@ class Machine:
                 self.regs[('gpio', reg)] = (cur | val) if (off & 0xf) == 4 else (cur & ~val)
                 if 0x400 <= reg < 0x500:
                     self.regs[('gpio', reg + 0x100)] = self.regs[('gpio', reg)]
+                self.msdc.update_power()
                 return
             self.regs[(bank, off)] = val
             if bank == 'wdt':
@@ -490,6 +492,8 @@ def main():
         print('  Wi-Fi firmware upload: %d block writes, %d of %d bytes accepted, %d rejected, chip status %s'
               % (s['writes'], m.msdc.loader.pos, len(m.msdc.loader.fw), s['bad'],
                  'RUNNING (0xfedc)' if m.msdc.loader.pos >= len(m.msdc.loader.fw) else 'waiting'))
+    if getattr(m.msdc, 'power_cycles', 0):
+        print('  Wi-Fi chip power-cycled %d time(s)' % m.msdc.power_cycles)
     if m.msdc.loader and m.msdc.loader.cmds:
         print('  Wi-Fi firmware commands: ' + ', '.join('%#06x%s' % (cmd, '' if res == 0 else ' (result %d)' % res) for cmd, res in m.msdc.loader.cmds))
     if m.keys:

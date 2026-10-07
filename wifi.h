@@ -495,14 +495,27 @@ static int wifi_cmd_err(const char *name, int r, u32 sub_base) {
     return 0;
 }
 
+// Power-cycle the Wi-Fi chip: chip enable off (GPIO85 is active low, so high = off), bus supply off, wait, and
+// let wifi_on() power it back up. The chip then starts from its boot ROM and waits for our firmware upload.
+// (Needed because on the real hana the chip's firmware is left running by ChromeOS and ignores commands: v1.9.)
+static void wifi_power_cycle(void) {
+    puts("power-cycling the Wi-Fi chip so its firmware starts fresh...\n");
+    pin_mode(85, 0);
+    gpio_out(85, 1);                                     // chip off
+    u32 v = 0;
+    if (!pmic_read(0x041e, &v)) pmic_write(0x041e, v & ~(1u << 15));   // bus supply VGP3 off
+    delay_us(300000);                                    // let the chip's supplies fully discharge
+}
+
 // Wi-Fi step: make sure the chip is up, then run the firmware's init commands and print its MAC address.
 static u8 wifi_mac[6];
-static int wifi_init(void) {
-    if (!wifi_fw()) return 0;
+static int wifi_hw_spec(void) {
     u8 r[96]; u32 n = 0;
     puts("talking to the Wi-Fi firmware...\n");
-    if (!wifi_cmd_err("FUNC_INIT", wifi_cmd(0x00a9, 0, 0, r, sizeof r, &n), 0)) return 0;
-    static const u8 zero[63];                                      // GET_HW_SPEC request: all-zero spec
+    int rc = wifi_cmd(0x00a9, 0, 0, r, sizeof r, &n);
+    if (rc == -2) return -2;                             // silent: caller may power-cycle
+    if (!wifi_cmd_err("FUNC_INIT", rc, 0)) return 0;
+    static const u8 zero[63];                            // GET_HW_SPEC request: all-zero spec
     if (!wifi_cmd_err("GET_HW_SPEC", wifi_cmd(0x0003, zero, sizeof zero, r, sizeof r, &n), 0)) return 0;
     if (n < 22) { errs("WIFI", 12, 3, "the Wi-Fi firmware's answer was not understood"); return 0; }
     for (u32 i = 0; i < 6; i++) wifi_mac[i] = r[8 + i];
@@ -513,6 +526,19 @@ static int wifi_init(void) {
     return 1;
 }
 
+static int wifi_init(void) {
+    if (!wifi_fw()) return 0;
+    int r = wifi_hw_spec();
+    if (r != -2) return r == 1;
+    // The running firmware (left by ChromeOS) never answered: restart the chip and load our own firmware.
+    puts("  no answer from the leftover firmware.\n");
+    wifi_power_cycle();
+    wifi_seq = 0;
+    if (!wifi_fw()) return 0;
+    r = wifi_hw_spec();
+    if (r == -2) { wifi_cmd_err("FUNC_INIT", -2, 0); return 0; }
+    return r == 1;
+}
 static void wifi_probe(void) {
     puts("wifi probe (read-only): Marvell 88W8897 on SDIO/MSDC3\n");
     show_pin(85, "chip power (WIFI_PDN)");

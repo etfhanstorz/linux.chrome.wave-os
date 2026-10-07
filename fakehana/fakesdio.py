@@ -71,6 +71,7 @@ class FakeFirmwareLoader:
     def __init__(self, firmware, running=False):
         self.fw = firmware
         self.running = running          # MODEL (real hana): the chip comes up with its firmware already running
+        self.hung = running             # ...left over from ChromeOS, mid-conversation: it ignores new commands until power-cycled
         self.pos = 0                    # bytes of firmware received so far
         self.chunks = [24] + [2312, 1156, 2312, 1000, 2312, 256, 2310]   # sizes the ROM asks for, then repeats
         self.i = 0
@@ -96,8 +97,18 @@ class FakeFirmwareLoader:
         n = self.chunks[self.i] if self.i < len(self.chunks) else 2312
         return min(n, len(self.fw) - self.pos)
 
+    def cold_boot(self):
+        """Power-cycled: the boot ROM runs and waits for a firmware download."""
+        self.running = self.hung = False
+        self.pos = 0; self.i = 0; self.acked = False
+        self.cfg = {0xcd: 0, 0xb8: 0, 0xb9: 0, 0x01: 0, 0xcc: 0}
+        self.mask = 0; self.int_status = 0; self.cmd_resp = b''
+        self.cold_boots = getattr(self, 'cold_boots', 0) + 1
+
     def host_command(self, d):
         import struct
+        if self.hung:
+            return                                       # no answer
         total, typ = struct.unpack_from('<HH', d, 0)
         cmd, size, seq, _ = struct.unpack_from('<HHHH', d, 4)
         body = b''
@@ -176,6 +187,17 @@ class FakeMSDC:
         self.tx = []               # bytes written to the TX FIFO for the current data command
         self.want_bytes = 0
         self.port_cmd = None
+
+    def update_power(self):
+        on = self.powered()
+        if not on:
+            self.was_off = True
+        elif getattr(self, 'was_off', False):
+            self.was_off = False
+            if self.card.loader:
+                self.card.loader.cold_boot()
+            self.card.state = 'idle'; self.card.ocr_polls = 0
+            self.power_cycles = getattr(self, 'power_cycles', 0) + 1
 
     def powered(self):
         # Chip power: GPIO85 is the ACTIVE-LOW enable of sdio_fixed_3v3 ("WIFI_PDN"): low = on.
