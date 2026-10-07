@@ -58,18 +58,28 @@ static void fill(const struct fb *f, u32 rgb) {
     }
 }
 
+#include "console.h"
 #ifdef QEMU
 #include "qemu_ramfb.h"
 #endif
 
+#define VERSION "wave-os v0.2"
+
 void main(const u8 *dtb) {
     struct fb f;
-    if (!find_fb(dtb, &f)) for (;;) ;         // no framebuffer node: nothing we can show
-    fill(&f, 0x0000FF);                       // stage 1: blue = framebuffer found
-    fill(&f, 0xFF0000);                       // stage 2: red  = milestone reached
 #ifdef QEMU
-    ramfb_init(0x48000000UL, 1366, 768);
-    for (;;) fill(&f, 0xFF0000);  // keep marking pages dirty so the QEMU display refreshes
+    ramfb_init(0x50000000UL, 1366, 768);
 #endif
+    if (!find_fb(dtb, &f)) for (;;) ;         // no framebuffer node: nothing we can show
+    fill(&f, 0x0000FF);                       // blue = framebuffer found
+    con_init(&f);
+    puts(VERSION "\n\n");
+    u64 el; __asm__ volatile("mrs %0, CurrentEL" : "=r"(el));
+    puts("exception level: EL"); put_dec(el >> 2); putc('\n');
+    puts("dtb at: "); put_hex((u64)dtb); puts(", size "); put_dec(be32(dtb + 4)); putc('\n');
+    puts("framebuffer: "); put_hex(f.addr); putc(' '); put_dec(f.w); putc('x'); put_dec(f.h);
+    puts(" stride "); put_dec(f.stride); puts(" bpp "); put_dec(f.bpp); putc('\n');
+    puts("console: "); put_dec(con_cols); putc('x'); put_dec(con_rows); puts(" chars\n\n");
+    puts("boot ok.\n");
     for (;;) __asm__ volatile("wfe");
 }

@@ -6,7 +6,7 @@ mkdir -p /tmp/q && cp t.dts /tmp/q/ 2>/dev/null || true
 cat > /tmp/q/t.dts <<'EOD'
 /dts-v1/;
 / { #address-cells=<2>; #size-cells=<2>;
-  framebuffer@48000000 { compatible="simple-framebuffer"; reg=<0 0x48000000 0 0x400000>; width=<1366>; height=<768>; stride=<5464>; format="a8r8g8b8"; };
+  framebuffer@50000000 { compatible="simple-framebuffer"; reg=<0 0x50000000 0 0x400000>; width=<1366>; height=<768>; stride=<5464>; format="a8r8g8b8"; };
 };
 EOD
 dtc -I dts -O dtb -o /tmp/q/t.dtb /tmp/q/t.dts 2>/dev/null
