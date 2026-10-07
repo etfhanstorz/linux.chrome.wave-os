@@ -437,6 +437,8 @@ bad:
 // Is a packet waiting on the command port? The status bit (0x03, read-to-clear) is easy to miss, so also look at the
 // packet-length registers 0xb4/0xb5 (v1.15 on hana: no status bit, but a 0x700-byte packet was sitting there).
 static u32 wifi_last_len;
+static u8 wifi_dbg[16];                   // first bytes of the last unexpected packet
+static u32 wifi_dbg_n;                  // how many unexpected packets were skipped
 static int cmd_packet_waiting(int st);
 static u8 wbuf[2312 + 256 + 256];
 static u16 wifi_seq;
@@ -460,6 +462,7 @@ static u32 get16(const u8 *p) { return p[0] | (p[1] << 8); }
 static int wifi_cmd(u32 cmd, const u8 *body, u32 blen, u8 *resp, u32 rmax, u32 *rlen) {
     u32 total = 4 + 8 + blen;
     if (total > 2312) return -1;
+    wifi_dbg_n = 0;
     for (u32 i = 0; i < 256 * ((total + 255) / 256); i++) wbuf[i] = 0;
     put16(wbuf, total); put16(wbuf + 2, 1);                       // SDIO header: length, type = command
     put16(wbuf + 4, cmd); put16(wbuf + 6, 8 + blen); put16(wbuf + 8, ++wifi_seq); put16(wbuf + 10, 0);
@@ -479,7 +482,11 @@ static int wifi_cmd(u32 cmd, const u8 *body, u32 blen, u8 *resp, u32 rmax, u32 *
             if (sdio_read_port(WCMD_PORT, wbuf, blocks)) return -3;
             u32 type = get16(wbuf + 2);
             if (type == 3) { if (wifi_event_hook) wifi_event_hook(wbuf + 4, get16(wbuf) > 4 ? get16(wbuf) - 4 : 0); continue; }   // an event: hand it on, keep waiting
-            if (type != 1 || (get16(wbuf + 4) & 0x7fff) != cmd) return -3;
+            if (type != 1 || (get16(wbuf + 4) & 0x7fff) != cmd) {      // not the answer to this command: remember what it was, keep waiting
+                for (u32 i = 0; i < 16; i++) wifi_dbg[i] = wbuf[i];
+                wifi_dbg_n++;
+                continue;
+            }
             u32 size = get16(wbuf + 6);
             u32 body_len = size > 8 ? size - 8 : 0;
             if (rlen) *rlen = body_len;
@@ -487,6 +494,7 @@ static int wifi_cmd(u32 cmd, const u8 *body, u32 blen, u8 *resp, u32 rmax, u32 *
             return (int)get16(wbuf + 10);
         }
         if (hz && ticks() - t0 > hz / 1000 * wifi_cmd_ms) {        // normally 1 s
+            if (wifi_dbg_n) { puts("  skipped "); put_dec(wifi_dbg_n); puts(" unexpected packet(s); the last began:"); for (u32 i = 0; i < 16; i++) { putc(' '); put_hex(wifi_dbg[i]); } putc('\n'); }
             puts("  no answer. status 0x03 = "); put_hex((u32)st); puts(", mask 0x02 = "); put_hex((u32)fn1_rd(0x02));
             puts(", 0x50 = "); put_hex((u32)fn1_rd(0x50)); puts(", cmd length 0xb4/5 = "); put_hex((u32)fn1_rd(0xb4)); puts("/"); put_hex((u32)fn1_rd(0xb5)); putc('\n');
             return -2;
