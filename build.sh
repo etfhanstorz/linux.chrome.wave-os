@@ -6,8 +6,9 @@ ${X}gcc -c -O2 -ffreestanding -fno-pic -mcmodel=tiny -mgeneral-regs-only -mstric
 ${X}gcc -c start.S -o start.o
 ${X}ld -T link.ld -nostdlib start.o main.o -o kernel.elf
 ${X}objcopy -O binary kernel.elf Image
-[ -f mt8173-elm-hana.dtb ] || { echo "Need mt8173-elm-hana.dtb in this folder"; exit 1; }
-mkimage -f hana.its image.itb
+[ -f archdt/fdt1.dtb ] || { echo "Need archdt/*.dtb (Arch device trees)"; exit 1; }
+# Arch Linux ARM FIT layout + device trees: proven to be started by this firmware (hana.its untested since the USB contact problem)
+mkimage -f archdt.its image.itb >/dev/null 2>&1
 head -c 512 /dev/zero > bootloader.bin
 futility vbutil_kernel --pack out.kpart \
   --keyblock /usr/share/vboot/devkeys/kernel.keyblock \

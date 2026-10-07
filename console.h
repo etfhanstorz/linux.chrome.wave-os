@@ -9,7 +9,7 @@ static u32 con_col, con_row, con_cols, con_rows, con_fg = 0xFFFFFF, con_bg = 0x0
 
 static void px(u32 x, u32 y, u32 rgb) {
     u8 *p = (u8 *)con_fb.addr + (u64)y * con_fb.stride;
-    if (con_fb.bpp == 32) ((volatile u32 *)p)[x] = rgb;
+    if (con_fb.bpp == 32) ((volatile u32 *)p)[x] = rgb | 0xFF000000;   // opaque alpha
     else ((volatile unsigned short *)p)[x] = ((rgb >> 19 & 31) << 11) | ((rgb >> 10 & 63) << 5) | (rgb >> 3 & 31);
 }
 static void glyph(u32 cx, u32 cy, char c) {

@@ -50,7 +50,7 @@ static int find_fb(const u8 *dt, struct fb *f) {
 static void fill(const struct fb *f, u32 rgb) {
     for (u32 y = 0; y < f->h; y++) {
         u8 *row = (u8 *)f->addr + (u64)y * f->stride;
-        if (f->bpp == 32) for (u32 x = 0; x < f->w; x++) ((volatile u32 *)row)[x] = rgb;
+        if (f->bpp == 32) for (u32 x = 0; x < f->w; x++) ((volatile u32 *)row)[x] = rgb | 0xFF000000;  // opaque alpha
         else {
             u32 c = ((rgb >> 19 & 31) << 11) | ((rgb >> 10 & 63) << 5) | (rgb >> 3 & 31);
             for (u32 x = 0; x < f->w; x++) ((volatile unsigned short *)row)[x] = c;
@@ -59,7 +59,8 @@ static void fill(const struct fb *f, u32 rgb) {
 }
 
 #include "console.h"
-#define VERSION "wave-os v0.4"
+#define VERSION "wave-os v0.5"
+#include "sys.h"
 #include "probe.h"
 #include "shell.h"
 #ifdef QEMU
@@ -69,6 +70,7 @@ static void fill(const struct fb *f, u32 rgb) {
 
 void main(const u8 *dtb) {
     struct fb f;
+    icache_on();
 #ifdef QEMU
     ramfb_init(0x50000000UL, 1366, 768);
 #endif
@@ -76,10 +78,18 @@ void main(const u8 *dtb) {
     int have_probe = probe_fb(&pf);           // always probe so the screen can show what it saw
     const char *src = "device tree";
     if (!find_fb(dtb, &f)) {
-        if (!have_probe) for (;;) ;           // nothing found anywhere: we cannot draw
+        if (!have_probe) {
+#ifndef QEMU
+            reboot();                         // signal: no screen found anywhere -> immediate reboot
+#endif
+            for (;;) ;
+        }
         f = pf; src = "display registers (OVL)";
     }
-    fill(&f, 0x0000FF);                       // blue = framebuffer found
+    fill(&f, 0xFFFFFF);                       // white = framebuffer found (most visible)
+#ifndef QEMU
+    delay_s(2);
+#endif
     con_init(&f);
     puts(VERSION "\n\n");
     u64 el; __asm__ volatile("mrs %0, CurrentEL" : "=r"(el));
@@ -99,7 +109,10 @@ void main(const u8 *dtb) {
 #ifdef QEMU
     puts("type help (typing goes in the Ubuntu terminal)\n\n");
 #else
-    puts("keyboard: no driver for this hardware yet\n\n");
+    puts("keyboard: no driver for this hardware yet\n");
+    puts("diagnostic build: rebooting in 20 seconds (take a photo!)\n");
+    delay_s(20);
+    reboot();
 #endif
     shell();
 }
