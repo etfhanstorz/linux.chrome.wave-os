@@ -334,7 +334,7 @@ static int sdio_read_port1(u32 addr, u8 *out, u32 blocks) {
 // Multi-block PIO reads never complete on this controller (v1.20-v1.24: data timeout on every 7-block read, while
 // single-block reads always work). The port is a FIFO, so read a packet one 256-byte block at a time instead.
 static u32 rd_total;                     // bytes of the current packet that arrived before a failure
-static int wifi_read_bytes;              // 0 = read a packet as 256-byte blocks, 1 = in BYTE mode (up to 512 bytes per transfer)
+static int wifi_read_bytes = 1;          // 1 = read a packet in BYTE mode (up to 512 bytes per transfer; clean on hana), 0 = as 256-byte blocks (garbled results on hana)
 static u32 dbg_starts[8], dbg_blocks, dbg_taken;   // first 4 bytes of each 256-byte block of the first big packet (scan diagnostics)
 
 // CMD53 BYTE-mode read from function 1, fixed address: one transfer of len bytes (4..512, multiple of 4), no block counting.
@@ -797,8 +797,11 @@ static int wifi_scan(int with5) {
     if (dbg_taken) { puts("first big packet, block starts:"); for (u32 b = 0; b < dbg_blocks; b++) { putc(' '); put_hex(dbg_starts[b]); } putc('\n'); }
     puts("scan events received: "); put_dec(scan_events); puts(" ("); put_dec(scan_bytes); puts(" bytes)\n");
     if (!scan_events) errs("WIFI", 14, 3, "the scan finished but the firmware sent no scan results");
-    puts("found "); put_dec(nap); puts(" networks:\n");
+    u32 hidden = 0;
+    for (u32 i = 0; i < nap; i++) if (!aps[i].ssid[0]) hidden++;
+    puts("found "); put_dec(nap - hidden); puts(" networks"); if (hidden) { puts(" ("); put_dec(hidden); puts(" hidden not shown)"); } puts(":\n");
     for (u32 i = 0; i < nap; i++) {
+        if (!aps[i].ssid[0]) continue;                              // hidden network (no name): not listed
         puts("  "); puts(aps[i].ssid[0] ? aps[i].ssid : "(hidden)");
         u32 l = aps[i].ssid[0] ? 0 : 8; while (aps[i].ssid[l]) l++;
         for (; l < 24; l++) putc(' ');

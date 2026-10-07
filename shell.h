@@ -24,7 +24,7 @@ static void run_cmd(char *line) {
     while (*arg && *arg != ' ') arg++;
     if (*arg) { *arg++ = 0; while (*arg == ' ') arg++; }
     if (!*line) return;
-    if (streq(line, "help")) outs("commands: help version info echo color clear errors wifi wifion wififw wifiinit wifiscan wifiscanb wifiscan5 cryptotest reboot\n");
+    if (streq(line, "help")) outs("commands: help version info echo color clear errors wifi wifion wififw wifiinit wifiscan wifiscanblk wifiscan5 cryptotest reboot\n");
     else if (streq(line, "version")) outs(VERSION "\n");
     else if (streq(line, "info")) cmd_info();
     else if (streq(line, "echo")) { outs(arg); out('\n'); }
@@ -34,9 +34,9 @@ static void run_cmd(char *line) {
     else if (streq(line, "wifion")) wifi_on();
     else if (streq(line, "wififw")) wifi_fw();
     else if (streq(line, "wifiinit")) wifi_init();
-    else if (streq(line, "wifiscan")) { wifi_read_bytes = 0; wifi_scan(0); }
-    else if (streq(line, "wifiscanb")) { wifi_read_bytes = 1; wifi_scan(0); }
-    else if (streq(line, "wifiscan5")) { wifi_read_bytes = 0; wifi_scan(1); }
+    else if (streq(line, "wifiscan")) { wifi_read_bytes = 1; wifi_scan(0); }
+    else if (streq(line, "wifiscanblk")) { wifi_read_bytes = 0; wifi_scan(0); }
+    else if (streq(line, "wifiscan5")) { wifi_read_bytes = 1; wifi_scan(1); }
     else if (streq(line, "cryptotest")) crypto_test();
     else if (streq(line, "reboot")) { outs("rebooting\n"); reboot(); }
     else if (streq(line, "color")) {
