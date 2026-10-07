@@ -22,6 +22,7 @@ import argparse, os, struct, subprocess, sys, tempfile, zlib
 
 from unicorn import Uc, UcError, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_INTR, UC_HOOK_MEM_UNMAPPED, UC_HOOK_INSN
 from unicorn.arm64_const import *
+from fakeec import FakeEC, FakeSPI, KeyScript
 
 RAM_BASE, RAM_SIZE = 0x40000000, 0xc0000000          # first 3 GB of the real 4 GB
 TIMER_HZ = 13_000_000                                # MT8173 system counter
@@ -110,6 +111,16 @@ class Machine:
         self._map('gpio', 0x10005000, 0x1000)
         self._map('wdt', 0x10007000, 0x1000)
         self._map('mmsys', 0x14000000, 0x21000)       # MMSYS config + OVL/RDMA/DSI/PWM/MUTEX blocks
+        self.timer_hz = TIMER_HZ
+        self.keys = KeyScript(args.keys.encode().decode('unicode_escape')) if args.keys else None
+        self.ec = FakeEC(self, self.keys)
+        self.spi = FakeSPI(self.ec)
+        self.stop_at = None
+        if args.run_seconds:
+            self.stop_at = int(args.run_seconds * TIMER_HZ)
+        elif self.keys:
+            self.stop_at = int((self.keys.end_s + 2.0) * TIMER_HZ)
+        self._map_spi()
         self.uc.hook_add(UC_HOOK_INTR, self._intr)
         self.uc.hook_add(UC_HOOK_MEM_UNMAPPED, self._unmapped)
         try:
@@ -201,6 +212,16 @@ class Machine:
                 self._wdt_write(off, val)
         self.uc.mmio_map(base, size, rd, None, wr, None)
 
+    def _map_spi(self):
+        def rd(uc, off, sz, _):
+            v = self.spi.read(off)
+            self._mmio('R', 'spi', off, v)
+            return v
+        def wr(uc, off, sz, val, _):
+            self._mmio('W', 'spi', off, val)
+            self.spi.write(off, val)
+        self.uc.mmio_map(0x1100a000, 0x1000, rd, None, wr, None)
+
     def _mmio(self, rw, bank, off, v):
         self.mmio_count += 1
         if self.mmio_count <= 400:
@@ -234,6 +255,8 @@ class Machine:
             self.ticks += TIMER_HZ // 1000
             uc.reg_write(reg, self.ticks)
             self._check_wdt()
+            if self.stop_at is not None and self.ticks >= self.stop_at:
+                self._stop('DONE', 'stopped at fake time %.1f s' % (self.ticks / TIMER_HZ))
             return True
         if cp.op0 == 3 and cp.op1 == 3 and cp.crn == 14 and cp.crm == 0 and cp.op2 == 0:
             uc.reg_write(reg, TIMER_HZ)
@@ -342,7 +365,9 @@ def main():
     ap.add_argument('--coreboot', action='store_true', help='firmware adds a /firmware/coreboot table with the framebuffer')
     ap.add_argument('--ramoops-in-dt', action='store_true', help='firmware adds a ramoops node to the DT (real hana: it does not)')
     ap.add_argument('--wdt-keeps-ram', action='store_true', help='a watchdog reset keeps RAM (default: wipes it)')
-    ap.add_argument('--max-insns', type=int, default=300_000_000)
+    ap.add_argument('--keys', help='text typed on the fake keyboard, e.g. "help\\n" (starts 1 s after boot)')
+    ap.add_argument('--run-seconds', type=float, help='stop at this fake time')
+    ap.add_argument('--max-insns', type=int, default=600_000_000)
     ap.add_argument('--png', default='fakehana-screen.png')
     ap.add_argument('--mmio', action='store_true', help='print every register access')
     a = ap.parse_args()
@@ -381,10 +406,22 @@ def main():
         print('       ...then the armed watchdog reboots it after %d s (RAM wiped)' % m.wdt['timeout_s'])
         kind = 'REBOOT'
 
+    if m.ec.commands:
+        from collections import Counter
+        names = {1: 'HELLO', 2: 'GET_VERSION', 0x60: 'MKBP_STATE', 0x61: 'MKBP_INFO'}
+        cnt = Counter((names.get(cmd, hex(cmd)), res) for cmd, res in m.ec.commands)
+        print('  EC commands: ' + ', '.join('%s x%d%s' % (n, k, '' if r == 0 else ' (result %d)' % r)
+                                            for (n, r), k in cnt.items()))
+        print('  SPI packets: %d' % m.spi.transfers)
+    if m.keys:
+        print('  keys typed: %r (done at fake %.1f s)' % (a.keys, m.keys.end_s))
+
     print('\n== /sys/fs/pstore/console-ramoops-0 on the next ChromeOS boot')
     text = m.ramoops_console() if (kind == 'REBOOT' and ram_kept) else None
     if kind == 'REBOOT' and not ram_kept:
         print('  (empty: the reboot wiped RAM)')
+    elif kind == 'DONE':
+        print('  (still running -- type reboot in the shell to keep the log)')
     elif kind != 'REBOOT':
         print('  (nothing yet: the machine did not reboot by itself)')
     elif text is None:

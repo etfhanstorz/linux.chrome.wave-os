@@ -7,7 +7,7 @@ static int input_poll(void) {
 }
 static void uart_put(char c) { *(volatile u32 *)UART0 = c; }
 #else
-static int input_poll(void) { return -1; }   // TODO: Chromebook EC keyboard driver
+static int input_poll(void) { wdt_kick(); return kb_getc(); }   // Chrome EC keyboard (ec.h)
 static void uart_put(char c) { (void)c; }
 #endif
 
@@ -24,11 +24,12 @@ static void run_cmd(char *line) {
     while (*arg && *arg != ' ') arg++;
     if (*arg) { *arg++ = 0; while (*arg == ' ') arg++; }
     if (!*line) return;
-    if (streq(line, "help")) outs("commands: help version info echo color clear\n");
+    if (streq(line, "help")) outs("commands: help version info echo color clear reboot\n");
     else if (streq(line, "version")) outs(VERSION "\n");
     else if (streq(line, "info")) cmd_info();
     else if (streq(line, "echo")) { outs(arg); out('\n'); }
     else if (streq(line, "clear")) con_clear();
+    else if (streq(line, "reboot")) { outs("rebooting\n"); reboot(); }
     else if (streq(line, "color")) {
         if (streq(arg, "white")) con_fg = 0xFFFFFF;
         else if (streq(arg, "green")) con_fg = 0x40FF40;

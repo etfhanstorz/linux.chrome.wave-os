@@ -2,6 +2,7 @@
 typedef unsigned char u8;
 typedef unsigned int u32;
 typedef unsigned long u64;
+typedef unsigned short u16;
 
 static u32 be32(const u8 *p) { return (u32)p[0] << 24 | p[1] << 16 | p[2] << 8 | p[3]; }
 static u64 be64(const u8 *p) { return (u64)be32(p) << 32 | be32(p + 4); }
@@ -60,10 +61,11 @@ static void fill(const struct fb *f, u32 rgb) {
 
 #include "rlog.h"
 #include "console.h"
-#define VERSION "wave-os v0.7"
+#define VERSION "wave-os v0.8"
 #include "sys.h"
 #include "probe.h"
 #include "display.h"
+#include "ec.h"
 #include "shell.h"
 #ifdef QEMU
 #include "qemu_ramfb.h"
@@ -171,14 +173,21 @@ void main(const u8 *dtb) {
     con_on = screen;
 
 #ifndef QEMU
-    if (con_on) {
-        con_fg = 0x40FF40;
-        puts("\n\nIf you can read this, wave-os drives the real screen!\n");
-        puts("Rebooting in 20 s. Then Ctrl+D and read /sys/fs/pstore/console-ramoops-0\n");
-    }
+    con_clear();
+    con_fg = 0x40FF40;
+    puts(VERSION "\n\n");
+    con_fg = 0xFFFFFF;
+    puts("keyboard...\n");
     wdt_kick();
-    delay_s(20);
-    reboot();
+    if (!kb_init()) {
+        con_fg = 0xFFE040;
+        puts("\nkeyboard: the EC did not answer. Rebooting in 20 s so the log is kept;\n");
+        puts("then Ctrl+D and read /sys/fs/pstore/console-ramoops-0\n");
+        wdt_kick();
+        delay_s(20);
+        reboot();
+    }
+    puts("\ntype help (reboot: restart; log in ChromeOS pstore)\n\n");
 #else
     puts("type help (typing goes in the Ubuntu terminal)\n\n");
 #endif
