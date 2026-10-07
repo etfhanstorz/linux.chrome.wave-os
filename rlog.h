@@ -100,10 +100,19 @@ static void logc(char c) {
 }
 
 // Same zone layout as Linux fs/pstore/ram.c: dmesg records first, then console, ftrace, pmsg.
+static const char *rlog_src = "device tree";
 static int rlog_init(void) {
-    if (!dti.ramoops_reg || !dti.con_size) return 0;
     u64 base, size;
-    reg_first(dti.ramoops_reg, dti.ramoops_reg_len, 1, &base, &size);
+    if (dti.ramoops_reg && dti.con_size) {
+        reg_first(dti.ramoops_reg, dti.ramoops_reg_len, 1, &base, &size);
+    } else {
+        // Not in the device tree on hana: use the values ChromeOS itself uses there
+        // (/sys/module/ramoops/parameters: 1 MB at 0xb1f00000, 128K record/console/pmsg, no ftrace, no ECC)
+        base = 0xb1f00000UL; size = 0x100000;
+        dti.rec_size = 0x20000; dti.con_size = 0x20000; dti.pmsg_size = 0x20000;
+        dti.ftrace_size = 0; dti.ecc_size = 0;
+        rlog_src = "hana defaults";
+    }
     if (!in_ram(base, size)) return 0;
     u64 dump = size - dti.con_size - dti.ftrace_size - dti.pmsg_size;
     u64 zone = base;

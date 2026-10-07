@@ -5,7 +5,8 @@ What it imitates (best guesses where marked GUESS -- the real hardware is still 
   * depthcharge's hand-off: unpack the signed kpart, read the FIT, pick the default config,
     add the DT nodes the firmware adds (bootargs, ramoops, optional coreboot table),
     place the arm64 Image at RAM + text_offset and jump to it with x0 = device tree.
-  * 2 GB RAM at 0x40000000 (from the hana device tree).
+  * RAM at 0x40000000 (real hana has 4 GB; the first 2 GB are modelled).
+  * ramoops exactly as ChromeOS uses it on hana (1 MB at 0xb1f00000), NOT in the device tree (as on the real one).
   * MediaTek peripherals at their real addresses: watchdog, display (MMSYS/OVL/RDMA/DSI),
     display PWM, GPIO. Every access is logged.
   * PSCI SYSTEM_RESET/OFF via smc, and the 13 MHz generic timer (fake, runs fast).
@@ -27,7 +28,7 @@ DT_ADDR = 0x4a000000                                 # where our fake firmware p
 FB_ADDR = 0x7d000000                                 # GUESS: framebuffer the firmware drew on
 FB_W, FB_H = 1366, 768                               # hana panel
 CB_TABLE = 0x7cff0000                                # GUESS: coreboot table location
-RAMOOPS = dict(base=0xb1f00000, size=0x100000, record=0x20000, console=0x20000, pmsg=0x20000)  # GUESS
+RAMOOPS = dict(base=0xb1f00000, size=0x100000, record=0x20000, console=0x20000, pmsg=0x20000)  # real: ChromeOS /sys/module/ramoops/parameters on hana
 
 def sh(*cmd, inp=None):
     return subprocess.run(cmd, input=inp, capture_output=True, check=True).stdout
@@ -69,12 +70,13 @@ def fit_pick(itb, tmp):
                 fdt_desc=get('/images/' + fname, 'description'))
     return extract(kname), extract(fname), info
 
-def fixup_dt(dtb, cmdline, tmp, coreboot):
+def fixup_dt(dtb, cmdline, tmp, coreboot, ramoops_in_dt):
     """Add what depthcharge adds. Done by decompiling and re-compiling with extra node blocks."""
     src = sh('dtc', '-q', '-I', 'dtb', '-O', 'dts', '-', inp=dtb).decode()
     r = RAMOOPS
     extra = '\n/ {\n  chosen { bootargs = "%s"; };\n' % cmdline.replace('"', '\\"')
-    extra += ('  reserved-memory { #address-cells = <2>; #size-cells = <2>; ranges;\n'
+    if ramoops_in_dt:
+      extra += ('  reserved-memory { #address-cells = <2>; #size-cells = <2>; ranges;\n'
               '    ramoops@%x { compatible = "ramoops"; reg = <0 0x%x 0 0x%x>; record-size = <0x%x>;'
               ' console-size = <0x%x>; pmsg-size = <0x%x>; };\n  };\n'
               % (r['base'], r['base'], r['size'], r['record'], r['console'], r['pmsg']))
@@ -307,6 +309,7 @@ def main():
     ap.add_argument('kpart')
     ap.add_argument('--display', choices=['on', 'off'], default='on', help='did the firmware leave the display powered on?')
     ap.add_argument('--coreboot', action='store_true', help='firmware adds a /firmware/coreboot table with the framebuffer')
+    ap.add_argument('--ramoops-in-dt', action='store_true', help='firmware adds a ramoops node to the DT (real hana: it does not)')
     ap.add_argument('--wdt-keeps-ram', action='store_true', help='a watchdog reset keeps RAM (default: wipes it)')
     ap.add_argument('--max-insns', type=int, default=300_000_000)
     ap.add_argument('--png', default='fakehana-screen.png')
@@ -316,7 +319,7 @@ def main():
     with tempfile.TemporaryDirectory() as tmp:
         itb, cmdline, kb, pre = unpack_kpart(a.kpart, tmp)
         kernel, dtb, info = fit_pick(itb, tmp)
-        dtb2 = fixup_dt(dtb, cmdline, tmp, a.coreboot)
+        dtb2 = fixup_dt(dtb, cmdline, tmp, a.coreboot, a.ramoops_in_dt)
 
     print('== fake hana: firmware hand-off')
     print('  kpart: keyblock %#x, preamble %#x, cmdline "%s"' % (kb, pre, cmdline))

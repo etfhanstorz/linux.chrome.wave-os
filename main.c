@@ -60,7 +60,7 @@ static void fill(const struct fb *f, u32 rgb) {
 
 #include "rlog.h"
 #include "console.h"
-#define VERSION "wave-os v0.6.1"
+#define VERSION "wave-os v0.6.2"
 #include "sys.h"
 #include "probe.h"
 #include "shell.h"
@@ -92,7 +92,7 @@ void main(const u8 *dtb) {
     puts(" nodes "); put_dec(dti.nodes); puts("  cntfrq "); put_dec(tick_hz()); putc('\n');
     puts("model: "); puts(dti.model ? dti.model : "(none)"); putc('\n');
     puts("bootargs: "); puts(dti.bootargs ? dti.bootargs : "(none)"); putc('\n');
-    puts("ramoops: "); puts(have_log ? "zone " : "not found "); put_hex(rlog_zone); puts(" size "); put_hex(rlog_zone_size);
+    puts("ramoops ("); puts(rlog_src); puts("): "); puts(have_log ? "zone " : "not usable "); put_hex(rlog_zone); puts(" size "); put_hex(rlog_zone_size);
     puts(" rec "); put_hex(dti.rec_size); puts(" con "); put_hex(dti.con_size); puts(" ftrace "); put_hex(dti.ftrace_size);
     puts(" pmsg "); put_hex(dti.pmsg_size); puts(" ecc "); put_dec(dti.ecc_size); putc('\n');
 
