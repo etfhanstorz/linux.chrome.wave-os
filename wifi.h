@@ -130,6 +130,33 @@ static int sdio_read_byte(u32 fn, u32 reg) {
     return r & 0xff;
 }
 
+// CMD52 write of one byte. Returns 0 on success.
+static int sdio_write_byte(u32 fn, u32 reg, u32 val) {
+    u32 r;
+    if (msdc_cmd(52, (1u << 31) | (fn << 28) | (reg << 9) | (val & 0xff), RSP_R1, &r)) return -1;
+    return ((r >> 8) & 0xcb) ? -1 : 0;
+}
+
+// Walk a CIS chain at `cis` for the MANFID tuple (0x20). Returns 0 and vendor/device, or -1.
+static int sdio_manfid(u32 cis, u32 *vendor, u32 *device) {
+    for (u32 p = cis, n = 0; n < 64; n++) {
+        int code = sdio_read_byte(0, p), len = sdio_read_byte(0, p + 1);
+        if (code < 0 || len < 0) return -1;
+        if (code == 0xff) return -1;             // end of chain, no MANFID
+        if (code == 0x20 && len >= 4) {
+            *vendor = sdio_read_byte(0, p + 2) | (sdio_read_byte(0, p + 3) << 8);
+            *device = sdio_read_byte(0, p + 4) | (sdio_read_byte(0, p + 5) << 8);
+            return 0;
+        }
+        p += 2 + (u32)len;
+    }
+    return -1;
+}
+
+static u32 cis_ptr(u32 base) {                   // 24-bit CIS pointer at base+9..11 (CCCR or FBR)
+    return (u32)sdio_read_byte(0, base + 9) | ((u32)sdio_read_byte(0, base + 10) << 8) | ((u32)sdio_read_byte(0, base + 11) << 16);
+}
+
 // Wi-Fi step 2: power the chip and say hello over SDIO. Ends by printing the chip's vendor/device ID.
 static int wifi_on(void) {
     puts("wifi on: bus supply, chip power, SDIO hello\n");
@@ -178,28 +205,41 @@ static int wifi_on(void) {
     u32 rca = r6 >> 16;
     if (msdc_cmd(7, rca << 16, RSP_R1B, &r1)) { err("WIFI", 5, "chip could not be selected (CMD7)"); return 0; }
     puts("  ready, address "); put_hex(rca); putc('\n');
-    // 5. Read the CCCR and walk the CIS for the manufacturer tuple (0x20)
+    // 5. Card ID from the common CIS. Marvell numbers each chip as card / Wi-Fi / Bluetooth:
+    //    8897 = 0x912c / 0x912d / 0x912e (Linux sdio_ids.h lists 0x912d, 0x912e; 8797 is 0x9128/9/a).
     int cccr = sdio_read_byte(0, 0x00), sdrev = sdio_read_byte(0, 0x01);
-    int cis = sdio_read_byte(0, 0x09) | (sdio_read_byte(0, 0x0a) << 8) | (sdio_read_byte(0, 0x0b) << 16);
     if (cccr < 0 || sdrev < 0) { err("WIFI", 6, "SDIO register read (CMD52) failed"); return 0; }
-    puts("  CCCR rev "); put_hex(cccr); puts(", SD rev "); put_hex(sdrev); puts(", CIS at "); put_hex((u32)cis); putc('\n');
-    u32 vendor = 0, device = 0;
-    for (u32 p = (u32)cis, n = 0; n < 64; n++) {
-        int code = sdio_read_byte(0, p), len = sdio_read_byte(0, p + 1);
-        if (code < 0 || len < 0) { err("WIFI", 6, "SDIO register read (CMD52) failed"); return 0; }
-        if (code == 0xff) break;                 // end of chain
-        if (code == 0x20 && len >= 4) {
-            vendor = sdio_read_byte(0, p + 2) | (sdio_read_byte(0, p + 3) << 8);
-            device = sdio_read_byte(0, p + 4) | (sdio_read_byte(0, p + 5) << 8);
-            break;
-        }
-        p += 2 + (u32)len;
+    u32 cis = cis_ptr(0x000), vendor = 0, device = 0;
+    puts("  CCCR rev "); put_hex(cccr); puts(", SD rev "); put_hex(sdrev); puts(", CIS at "); put_hex(cis); putc('\n');
+    if (sdio_manfid(cis, &vendor, &device)) { err("WIFI", 6, "SDIO register read (CMD52) failed"); return 0; }
+    puts("  card: vendor "); put_hex(vendor); puts(", device "); put_hex(device);
+    if (vendor != 0x02df || (device != 0x912c && device != 0x912d)) {
+        puts("\n"); err("WIFI", 7, "unexpected SDIO vendor/device ID (not a Marvell 88W8897)"); return 0;
     }
-    puts("  vendor "); put_hex(vendor); puts(", device "); put_hex(device);
-    if (vendor == 0x02df && device == 0x912d) { puts(": Marvell 88W8897. Hello, Wi-Fi chip!\n"); return 1; }
-    puts("\n");
-    err("WIFI", 7, "unexpected SDIO vendor/device ID (not a Marvell 88W8897)");
-    return 0;
+    puts(": Marvell 88W8897\n");
+    // 6. Function 1 = Wi-Fi: its own ID (FBR1 at 0x100), switch it on, wait until ready, block size 256
+    u32 fv = 0, fd = 0;
+    if (sdio_manfid(cis_ptr(0x100), &fv, &fd) == 0) {
+        puts("  function 1: vendor "); put_hex(fv); puts(", device "); put_hex(fd);
+        puts(fd == 0x912d ? " (Wi-Fi)\n" : " (?)\n");
+    }
+    int ioe = sdio_read_byte(0, 0x02);
+    if (ioe < 0 || sdio_write_byte(0, 0x02, (u32)ioe | 2)) { err("WIFI", 6, "SDIO register read (CMD52) failed"); return 0; }
+    int ready = 0;
+    t0 = ticks();
+    while (!ready) {
+        int ior = sdio_read_byte(0, 0x03);
+        if (ior >= 0 && (ior & 2)) ready = 1;
+        else if (hz && ticks() - t0 > hz) break;
+        else delay_us(10000);
+    }
+    if (!ready) { err("WIFI", 8, "Wi-Fi function 1 did not become ready after enabling"); return 0; }
+    if (sdio_write_byte(0, 0x110, 0x00) || sdio_write_byte(0, 0x111, 0x01)) {   // FBR1 block size = 256
+        err("WIFI", 6, "SDIO register read (CMD52) failed"); return 0;
+    }
+    int bs = sdio_read_byte(0, 0x110) | (sdio_read_byte(0, 0x111) << 8);
+    puts("  function 1 on and ready, block size "); put_dec((u64)bs); puts(". Hello, Wi-Fi chip!\n");
+    return 1;
 }
 
 static void wifi_probe(void) {

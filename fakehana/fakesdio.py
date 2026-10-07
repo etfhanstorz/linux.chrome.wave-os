@@ -6,11 +6,13 @@ driven high in GPIO mode. Otherwise every command times out (MSDC_INT CMDTMO), l
 """
 import struct
 
-# A tiny CIS: CISTPL_MANFID (0x20) with Marvell's vendor id 0x02df and the 88W8897 device id 0x912d
-CIS_ADDR = 0x1000
+# Tiny CIS chains: CISTPL_MANFID (0x20) with Marvell's vendor id 0x02df. Like the real hana chip
+# (measured by v1.2): the card (function 0) says 0x912c; the Wi-Fi function (1) says 0x912d.
+CIS_ADDR, CIS1_ADDR = 0x1000, 0x2000
 CIS = bytes([0x21, 0x02, 0x0c, 0x00,               # CISTPL_FUNCID: network
-             0x20, 0x04, 0xdf, 0x02, 0x2d, 0x91,   # CISTPL_MANFID
+             0x20, 0x04, 0xdf, 0x02, 0x2c, 0x91,   # CISTPL_MANFID: card 0x912c
              0xff])
+CIS1 = bytes([0x20, 0x04, 0xdf, 0x02, 0x2d, 0x91, 0xff])   # function 1: Wi-Fi 0x912d
 
 class FakeCard:
     def __init__(self):
@@ -18,7 +20,8 @@ class FakeCard:
         self.ocr_polls = 0
         self.rca = 0x0001
         self.cccr = {0x00: 0x43, 0x01: 0x03, 0x02: 0x00, 0x03: 0x00, 0x08: 0x13,
-                     0x09: CIS_ADDR & 0xff, 0x0a: (CIS_ADDR >> 8) & 0xff, 0x0b: 0}
+                     0x09: CIS_ADDR & 0xff, 0x0a: (CIS_ADDR >> 8) & 0xff, 0x0b: 0,
+                     0x109: CIS1_ADDR & 0xff, 0x10a: (CIS1_ADDR >> 8) & 0xff, 0x10b: 0}
 
     def command(self, op, arg):
         """Return the 32-bit response register value (bits 39:8 of the response), or None (timeout)."""
@@ -42,9 +45,16 @@ class FakeCard:
         if op == 52 and self.state == 'transfer':     # IO_RW_DIRECT -> R5: flags 0x10 (CMD state) + data
             fn, reg = (arg >> 28) & 7, (arg >> 9) & 0x1ffff
             write = arg >> 31
-            if fn == 0 and not write:
+            if fn == 0 and write:
+                self.cccr[reg] = arg & 0xff
+                if reg == 0x02:
+                    self.cccr[0x03] = arg & 0xff      # functions report ready right after enabling
+                return 0x1000 | (arg & 0xff)
+            if fn == 0:
                 if CIS_ADDR <= reg < CIS_ADDR + len(CIS):
                     data = CIS[reg - CIS_ADDR]
+                elif CIS1_ADDR <= reg < CIS1_ADDR + len(CIS1):
+                    data = CIS1[reg - CIS1_ADDR]
                 else:
                     data = self.cccr.get(reg, 0)
                 return 0x1000 | data
