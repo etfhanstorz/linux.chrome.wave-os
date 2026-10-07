@@ -25,6 +25,7 @@ watchdog rebooted the machine (that wipes RAM) -- or it never started (check the
 | **KB-08** | SPI read failed in the reply data | Was the "odd-sized chunk" jam before v0.8.1 |
 | **KB-09** | Reply checksum wrong | Noise on the bus, or misaligned FIFO reads |
 | **KB-10** | Request too long (wave-os bug) | |
+| **WIFI-01** | PMIC wrapper did not answer: can't read the Wi-Fi bus supply (VGP3) | Wrapper busy or not initialised by the firmware |
 | **EC-01** | EC: invalid command (this EC does not know the command) | |
 | **EC-02** | EC: error | |
 | **EC-03** | EC: invalid parameter | |

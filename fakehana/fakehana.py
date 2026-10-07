@@ -111,6 +111,13 @@ class Machine:
         self._map('gpio', 0x10005000, 0x1000)
         self._map('wdt', 0x10007000, 0x1000)
         self._map('mmsys', 0x14000000, 0x21000)       # MMSYS config + OVL/RDMA/DSI/PWM/MUTEX blocks
+        # Wi-Fi dependencies (GUESSES until wave-os v0.10 measures the real machine)
+        self._map('pericfg', 0x10003000, 0x1000)      # clock gates
+        self._map('pwrap', 0x1000d000, 0x1000)        # PMIC wrapper -> fake MT6397
+        self._map('msdc3', 0x11260000, 0x1000)        # SDIO controller for the Marvell 88W8897
+        self.regs[('pericfg', 0x18)] = 1 << 16        # PERI0: MSDC30_3 clock gated
+        self.pmic = {0x0100: 0x0097, 0x041e: 0x0000, 0x043a: 3 << 5}   # CID; VGP3 off; VGP3 = 1.8 V
+        self.pwrap_fsm, self.pwrap_data = 0, 0
         self.timer_hz = TIMER_HZ
         self.keys = KeyScript(args.keys.encode().decode('unicode_escape')) if args.keys else None
         self.ec = FakeEC(self, self.keys)
@@ -192,6 +199,13 @@ class Machine:
             if self._display_hangs(bank, off):
                 self._stop('FREEZE', 'read of %s while the display is powered off (bus hang)' % self._blockname(bank, off))
                 return 0
+            if bank == 'msdc3' and self.regs.get(('pericfg', 0x18), 0) & (1 << 16):
+                self._stop('FREEZE', 'read of msdc3+%#x while its clock is gated (bus hang)' % off)
+                return 0
+            if bank == 'pwrap' and off == 0xa4:              # WACS2_RDATA: fsm in bits 16-18, data in 0-15
+                v = (self.pwrap_fsm << 16) | self.pwrap_data
+                self._mmio('R', bank, off, v)
+                return v
             v = self.regs.get((bank, off), 0)
             if bank == 'mmsys' and off == 0xe004 and self.regs.get(('mmsys', 0xc00c), 0) & 1:
                 v |= 0x6                                     # RDMA0 sees frame start/end while OVL0 runs
@@ -202,6 +216,22 @@ class Machine:
                 self._stop('FREEZE', 'write to %s while the display is powered off (bus hang)' % self._blockname(bank, off))
                 return
             self._mmio('W', bank, off, val)
+            if bank == 'msdc3' and self.regs.get(('pericfg', 0x18), 0) & (1 << 16):
+                self._stop('FREEZE', 'write to msdc3+%#x while its clock is gated (bus hang)' % off)
+                return
+            if bank == 'pwrap' and off == 0xa0:              # WACS2_CMD: bit31 write, adr>>1 in 16-30
+                adr = ((val >> 16) & 0x7fff) << 1
+                if val >> 31:
+                    self.pmic[adr] = val & 0xffff
+                self.pwrap_data, self.pwrap_fsm = self.pmic.get(adr, 0), 6   # wait-for-valid-clear
+                return
+            if bank == 'pwrap' and off == 0xa8:              # WACS2_VLDCLR
+                self.pwrap_fsm = 0
+                return
+            if bank == 'pericfg' and off in (0x08, 0x10):    # PERI0 gate SET / CLR -> status
+                cur = self.regs.get(('pericfg', 0x18), 0)
+                self.regs[('pericfg', 0x18)] = (cur | val) if off == 0x08 else (cur & ~val)
+                return
             if bank == 'gpio' and off < 0x600 and (off & 0xf) in (4, 8):
                 reg = off & ~0xf
                 cur = self.regs.get(('gpio', reg), 0)

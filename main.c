@@ -61,11 +61,12 @@ static void fill(const struct fb *f, u32 rgb) {
 
 #include "rlog.h"
 #include "console.h"
-#define VERSION "wave-os v0.9"
+#define VERSION "wave-os v0.10"
 #include "err.h"
 #include "sys.h"
 #include "probe.h"
 #include "display.h"
+#include "wifi.h"
 #include "ec.h"
 #include "shell.h"
 #ifdef QEMU
@@ -165,6 +166,7 @@ void main(const u8 *dtb) {
     dump("gpio", 0x10005000UL, gpio_regs, 10);
     dump("disp_pwm0", 0x1401e000UL, pwm_regs, 4);
     dump("dsi0", 0x1401b000UL, dsi_regs, 4);
+    wifi_probe();                             // read-only; also the 'wifi' shell command
 
 #ifndef QEMU
     puts("turning on backlight (GPIO32, pin87, GPIO95) and overlay engine (OVL0_EN)\n");
