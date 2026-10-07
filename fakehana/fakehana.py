@@ -126,7 +126,9 @@ class Machine:
         r[('gpio', 0x710)] = 0x1249                   # pins 85-89 mode 1 (85 = audio data, not yet GPIO)
         self.pmic = {0x0100: 0x2091, 0x041e: 0x0000, 0x043a: 0x00a1}   # CID; VGP3 off; VGP3 at 2.8 V
         self.pwrap_fsm, self.pwrap_data = 0, 0
-        self.msdc = FakeMSDC(self, self.regs)
+        fw_path = args.firmware
+        fw = open(fw_path, 'rb').read() if os.path.exists(fw_path) else None
+        self.msdc = FakeMSDC(self, self.regs, fw)
         self.timer_hz = TIMER_HZ
         self.keys = KeyScript(args.keys.encode().decode('unicode_escape')) if args.keys else None
         self.ec = FakeEC(self, self.keys)
@@ -428,6 +430,8 @@ def main():
     ap.add_argument('--keys', help='text typed on the fake keyboard, e.g. "help\\n" (starts 1 s after boot)')
     ap.add_argument('--run-seconds', type=float, help='stop at this fake time')
     ap.add_argument('--ec', choices=['on', 'off'], default='on', help='scenario: the EC answers, or stays silent')
+    ap.add_argument('--firmware', default=os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'fw', 'sd8897_uapsta.bin'),
+                    help='the Wi-Fi firmware the fake chip checks the upload against')
     ap.add_argument('--max-insns', type=int, default=600_000_000)
     ap.add_argument('--png', default='fakehana-screen.png')
     ap.add_argument('--mmio', action='store_true', help='print every register access')
@@ -477,6 +481,11 @@ def main():
         print('  EC commands: ' + ', '.join('%s x%d%s' % (n, k, '' if r == 0 else ' (result %d)' % r)
                                             for (n, r), k in cnt.items()))
         print('  SPI packets: %d%s' % (m.spi.transfers, ', JAMMED %d times (odd-sized chunk mid-message)' % m.spi.jams if m.spi.jams else ''))
+    if m.msdc.loader and m.msdc.loader.stats['writes']:
+        s = m.msdc.loader.stats
+        print('  Wi-Fi firmware upload: %d block writes, %d of %d bytes accepted, %d rejected, chip status %s'
+              % (s['writes'], m.msdc.loader.pos, len(m.msdc.loader.fw), s['bad'],
+                 'RUNNING (0xfedc)' if m.msdc.loader.pos >= len(m.msdc.loader.fw) else 'waiting'))
     if m.keys:
         print('  keys typed: %r (done at fake %.1f s)' % (a.keys, m.keys.end_s))
 

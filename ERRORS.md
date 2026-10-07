@@ -33,6 +33,9 @@ watchdog rebooted the machine (that wipes RAM) -- or it never started (check the
 | **WIFI-06** | SDIO register read (CMD52) failed | |
 | **WIFI-07** | Unexpected SDIO vendor/device ID (not a Marvell 88W8897: card 0x912c, Wi-Fi 0x912d) | Different Wi-Fi chip in this unit? (before v1.3 this check wrongly expected 0x912d for the whole card) |
 | **WIFI-08** | Wi-Fi function 1 did not become ready after enabling it (CCCR I/O ready bit) | |
+| **WIFI-09** | Firmware upload failed (chip stopped asking, data write failed, or the faster bus is unreliable) | A block-write number is printed just above |
+| **WIFI-10** | Firmware upload: chip asked for an impossible length | |
+| **WIFI-11** | Firmware uploaded but did not report ready (status 0xfedc) | The status value is printed above |
 | **EC-01** | EC: invalid command (this EC does not know the command) | |
 | **EC-02** | EC: error | |
 | **EC-03** | EC: invalid parameter | |

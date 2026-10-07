@@ -11,6 +11,7 @@ cat > /tmp/q/t.dts <<'EOD'
 EOD
 dtc -I dts -O dtb -o /tmp/q/t.dtb /tmp/q/t.dts 2>/dev/null
 ${X}gcc -DQEMU -c -O2 -ffreestanding -fpie -mgeneral-regs-only -mstrict-align -nostdlib main.c -o /tmp/q/main.o
+${X}gcc -c fw.S -o /tmp/q/fw.o 2>/dev/null || true
 ${X}gcc -c start.S -o /tmp/q/start.o
 ${X}ld -pie --no-dynamic-linker -z notext -T link.ld -nostdlib /tmp/q/start.o /tmp/q/main.o -o /tmp/q/k.elf
 ${X}objcopy -O binary /tmp/q/k.elf /tmp/q/Image

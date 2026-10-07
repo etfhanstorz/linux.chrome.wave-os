@@ -12,3 +12,6 @@ flash-launch.log
 archdt/arch_Image
 fakehana/*.png
 fakehana/__pycache__/
+fw/
+releases/wave-os-v1.4-*.kpart
+releases/wave-os-v1.[4-9]*.kpart

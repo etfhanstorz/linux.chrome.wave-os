@@ -3,8 +3,10 @@
 set -e
 X=aarch64-linux-gnu-
 ${X}gcc -c -O2 -ffreestanding -fpie -mgeneral-regs-only -mstrict-align -nostdlib main.c -o main.o
+[ -f fw/sd8897_uapsta.bin ] || sh fetch_fw.sh
+${X}gcc -c fw.S -o fw.o
 ${X}gcc -c start.S -o start.o
-${X}ld -pie --no-dynamic-linker -z notext -T link.ld -nostdlib start.o main.o -o kernel.elf
+${X}ld -pie --no-dynamic-linker -z notext -T link.ld -nostdlib start.o main.o fw.o -o kernel.elf
 ${X}objcopy -O binary kernel.elf Image
 # Sanity-check the arm64 Image header and the relocations before packing
 python3 - <<'EOF'

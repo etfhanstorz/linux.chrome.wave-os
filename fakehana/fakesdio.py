@@ -45,6 +45,11 @@ class FakeCard:
         if op == 52 and self.state == 'transfer':     # IO_RW_DIRECT -> R5: flags 0x10 (CMD state) + data
             fn, reg = (arg >> 28) & 7, (arg >> 9) & 0x1ffff
             write = arg >> 31
+            if fn == 1 and getattr(self, 'loader', None):
+                if write:
+                    self.loader.write_reg(reg, arg & 0xff)
+                    return 0x1000 | (arg & 0xff)
+                return 0x1000 | self.loader.reg(reg)
             if fn == 0 and write:
                 self.cccr[reg] = arg & 0xff
                 if reg == 0x02:
@@ -61,12 +66,64 @@ class FakeCard:
             return 0x1000
         return None
 
+class FakeFirmwareLoader:
+    """Function-1 registers of the 88W8897 boot ROM (numbers from Linux mwifiex_reg_sd8897)."""
+    def __init__(self, firmware):
+        self.fw = firmware
+        self.pos = 0                    # bytes of firmware received so far
+        self.chunks = [24] + [2312, 1156, 2312, 1000, 2312, 256, 2310]   # sizes the ROM asks for, then repeats
+        self.i = 0
+        self.last = None
+        self.stats = dict(writes=0, bytes=0, bad=0)
+        self.cfg = {0xcd: 0, 0xb8: 0, 0xb9: 0}
+
+    def want(self):
+        if self.pos >= len(self.fw):
+            return 0
+        n = self.chunks[self.i] if self.i < len(self.chunks) else 2312
+        return min(n, len(self.fw) - self.pos)
+
+    def reg(self, r):
+        if r == 0x50:
+            return 0x09                                  # card io ready | download ready
+        if r in (0x60, 0x61):
+            n = self.want() + (self.want() & 1)          # ROM reports even lengths
+            n = self.want()
+            return (n >> (8 * (r - 0x60))) & 0xff
+        if r in (0xc0, 0xc1):
+            done = self.pos >= len(self.fw)
+            return (0xfedc >> (8 * (r - 0xc0))) & 0xff if done else 0
+        return self.cfg.get(r, 0)
+
+    def write_reg(self, r, v):
+        if r in self.cfg:
+            self.cfg[r] = v
+
+    def port_write(self, data):
+        """A CMD53 block write to the memory port: must be exactly what the ROM asked for."""
+        n = self.want()
+        self.stats['writes'] += 1
+        if not (self.cfg[0xcd] & 1) or len(data) < n:
+            self.stats['bad'] += 1
+            return
+        if data[:n] != self.fw[self.pos:self.pos + n]:
+            self.stats['bad'] += 1
+            return
+        self.pos += n
+        self.i += 1
+        self.stats['bytes'] += n
+
 class FakeMSDC:
-    def __init__(self, machine, regs):
+    def __init__(self, machine, regs, firmware=None):
         self.m = machine
         self.r = regs              # shared register dict in the machine, keys ('msdc3', off)
         self.card = FakeCard()
         self.commands = []         # (opcode, answered)
+        self.loader = FakeFirmwareLoader(firmware) if firmware else None
+        self.card.loader = self.loader
+        self.tx = []               # bytes written to the TX FIFO for the current data command
+        self.want_bytes = 0
+        self.port_cmd = None
 
     def powered(self):
         # Chip power: GPIO85 is the ACTIVE-LOW enable of sdio_fixed_3v3 ("WIFI_PDN"): low = on.
@@ -79,6 +136,8 @@ class FakeMSDC:
         v = self.r.get(('msdc3', off), 0)
         if off == 0x00:
             v |= 1 << 7                               # CKSTB: clock stable
+        if off == 0x14:
+            v = 0                                     # FIFO drains instantly: TXCNT/RXCNT 0
         return v
 
     def write(self, off, val):
@@ -93,8 +152,24 @@ class FakeMSDC:
         if off == 0x14:                               # FIFOCS: CLR self-clears
             r[('msdc3', 0x14)] = val & ~(1 << 31)
             return True
+        if off == 0x18:                               # MSDC_TXDATA: a word into the TX FIFO
+            self.tx += [(val >> (8 * j)) & 0xff for j in range(4)]
+            if self.port_cmd and len(self.tx) >= self.want_bytes:
+                if self.card.loader:
+                    self.card.loader.port_write(bytes(self.tx[:self.want_bytes]))
+                r[('msdc3', 0x0c)] = r.get(('msdc3', 0x0c), 0) | (1 << 12)     # XFER_COMPL
+                self.port_cmd = None
+            return True
         if off == 0x34:                               # SDC_CMD: run the command now
             op, arg = val & 0x3f, r.get(('msdc3', 0x38), 0)
+            if op == 53 and (val >> 13) & 1 and self.powered():      # CMD53 write: data follows through the FIFO
+                self.tx = []
+                self.want_bytes = ((val >> 16) & 0xfff) * r.get(('msdc3', 0x50), 1)
+                self.port_cmd = (arg >> 9) & 0x1ffff
+                self.commands.append((op, True))
+                r[('msdc3', 0x40)] = 0x1000
+                r[('msdc3', 0x0c)] = r.get(('msdc3', 0x0c), 0) | (1 << 8)  # CMDRDY
+                return True
             resp = self.card.command(op, arg) if self.powered() else None
             if (val >> 7) & 7 == 0:                   # no response expected: always "done"
                 resp = 0
