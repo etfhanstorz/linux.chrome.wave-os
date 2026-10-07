@@ -121,6 +121,7 @@ class FakeSPI:
         # of 4, the next chunk in the same chip-select session never completes (STATUS0 stays 0).
         self.odd_pending = False
         self.jams = 0
+        self.stall = 0                                       # set from --spi-stall N
 
     def read(self, off):
         if off == 0x14:                                      # SPI_RX_DATA
@@ -153,6 +154,11 @@ class FakeSPI:
                 self.active = True
                 self.ec.cs_begin()
             n = ((self.regs.get(0x04, 0) >> 16) & 0x3ff) + 1
+            if self.stall > 0:                               # scenario: first N packets never complete (v1.4 on hana)
+                self.stall -= 1
+                self.stall_hits = getattr(self, 'stall_hits', 0) + 1
+                self.tx = []
+                return
             if self.odd_pending:
                 self.jams += 1                               # jammed: status never comes
                 return

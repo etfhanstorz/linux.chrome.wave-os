@@ -133,6 +133,7 @@ class Machine:
         self.keys = KeyScript(args.keys.encode().decode('unicode_escape')) if args.keys else None
         self.ec = FakeEC(self, self.keys)
         self.spi = FakeSPI(self.ec)
+        self.spi.stall = args.spi_stall
         self.stop_at = None
         if args.run_seconds:
             self.stop_at = int(args.run_seconds * TIMER_HZ)
@@ -429,6 +430,7 @@ def main():
     ap.add_argument('--wdt-keeps-ram', action='store_true', help='a watchdog reset keeps RAM (default: wipes it)')
     ap.add_argument('--keys', help='text typed on the fake keyboard, e.g. "help\\n" (starts 1 s after boot)')
     ap.add_argument('--run-seconds', type=float, help='stop at this fake time')
+    ap.add_argument('--spi-stall', type=int, default=0, help='scenario: the first N SPI packets never complete')
     ap.add_argument('--ec', choices=['on', 'off'], default='on', help='scenario: the EC answers, or stays silent')
     ap.add_argument('--firmware', default=os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'fw', 'sd8897_uapsta.bin'),
                     help='the Wi-Fi firmware the fake chip checks the upload against')

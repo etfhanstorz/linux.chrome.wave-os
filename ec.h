@@ -67,7 +67,7 @@ static int spi_chunk(const u8 *tx, u8 *rx, u32 n) {
     for (u32 i = 0; i < 2000000; i++) {
         st = spi_rd(SPI_STATUS0);
         if (st) break;
-        if (hz && ticks() - t0 > hz / 50) break;                     // 20 ms
+        if (hz && ticks() - t0 > hz / 20) break;                     // 50 ms
     }
     if (!st) { spi_timeouts++; spi_last_cmd = spi_rd(SPI_CMD); spi_last_len = n; return -1; }
     spi_paused = (st & 2) != 0;
@@ -201,7 +201,15 @@ static int kb_init(void) {
     spi_init();
     u8 buf[96]; u16 n = 0;
     u8 hello[4] = {0x00, 0x00, 0xa0, 0xa0};                          // 0xa0a00000; EC answers +0x01020304
-    int r = ec_cmd(EC_CMD_HELLO, 0, hello, 4, buf, 4, &n);
+    int r = -1;
+    for (int attempt = 1; attempt <= 5; attempt++) {                 // the first transfer after boot sometimes stalls (v1.4 on hana: KB-02)
+        r = ec_cmd(EC_CMD_HELLO, 0, hello, 4, buf, 4, &n);
+        if (r == 0) break;
+        puts("ec hello try "); put_dec(attempt); puts(" failed: "); put_dec((u64)(r < 0 ? -r : r)); puts(" (spi timeouts "); put_dec(spi_timeouts);
+        puts(", status "); put_hex(spi_rd(SPI_STATUS0)); puts(", cmd "); put_hex(spi_rd(SPI_CMD)); puts(")\n");
+        spi_init();                                                  // reset and reprogram the controller, then wait
+        delay_us(50000);
+    }
     puts("ec hello: "); put_dec((u64)(r < 0 ? -r : r)); puts(r < 0 ? " (wave-os error)" : " (ec result)");
     if (r == 0) { puts(" answer "); put_hex(buf[0] | buf[1] << 8 | (u32)buf[2] << 16 | (u32)buf[3] << 24); }
     puts(" spi timeouts "); put_dec(spi_timeouts); putc('\n');
