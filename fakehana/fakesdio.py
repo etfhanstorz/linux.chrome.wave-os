@@ -126,6 +126,8 @@ class FakeFirmwareLoader:
             p, chans = 0, []
             while p + 4 <= len(tl):
                 ttype, tlen = struct.unpack_from('<HH', tl, p)
+                if ttype == 0x0112 and tlen >= 1 and tl[p + 4] != 32:
+                    silent = True                              # MODEL (real hana): max_ssid_length 0 = specific scan for an empty name: no answer
                 if ttype == 0x0101:
                     chans = [(tl[p + 4 + k * 6], tl[p + 4 + k * 6 + 1], tl[p + 4 + k * 6 + 2]) for k in range(tlen // 6)]
                 p += 4 + tlen
@@ -171,6 +173,9 @@ class FakeFirmwareLoader:
             body = struct.pack('<HB', len(recs), len(aps)) + recs
         else:
             result = 1
+        if locals().get('silent'):
+            self.cmds.append((cmd, -1))
+            return
         resp = struct.pack('<HHHHHH', 12 + len(body), 1, cmd | 0x8000, 8 + len(body), seq, result) + body
         self.cmds.append((cmd, result))
         self.queue.append(resp)

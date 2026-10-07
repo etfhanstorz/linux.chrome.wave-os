@@ -610,7 +610,7 @@ static int scan_band(u32 radio, const u8 *chans, u32 nch) {
     u32 p = 0;
     put16(body, 0); put16(body + 2, 0); p = 4;                      // u32 reserved
     put16(body + p, 0x01ce); put16(body + p + 2, 1); body[p + 4] = 3; p += 5;            // BSS mode TLV: any
-    put16(body + p, 0x0112); put16(body + p + 2, 1); body[p + 4] = 0; p += 5;            // wildcard SSID TLV
+    put16(body + p, 0x0112); put16(body + p + 2, 1); body[p + 4] = 32; p += 5;           // wildcard SSID TLV: max length 32 = scan for ANY name (0 would mean 'this exact, empty name': v1.14 got no answer)
     put16(body + p, 0x0101); put16(body + p + 2, nch * 6); p += 4;                       // channel list TLV
     for (u32 i = 0; i < nch; i++) {
         body[p] = radio; body[p + 1] = chans[i]; body[p + 2] = 0x02;                      // active, channel filter disabled
