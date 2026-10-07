@@ -24,11 +24,12 @@ static void run_cmd(char *line) {
     while (*arg && *arg != ' ') arg++;
     if (*arg) { *arg++ = 0; while (*arg == ' ') arg++; }
     if (!*line) return;
-    if (streq(line, "help")) outs("commands: help version info echo color clear reboot\n");
+    if (streq(line, "help")) outs("commands: help version info echo color clear errors reboot\n");
     else if (streq(line, "version")) outs(VERSION "\n");
     else if (streq(line, "info")) cmd_info();
     else if (streq(line, "echo")) { outs(arg); out('\n'); }
     else if (streq(line, "clear")) con_clear();
+    else if (streq(line, "errors")) list_errors();
     else if (streq(line, "reboot")) { outs("rebooting\n"); reboot(); }
     else if (streq(line, "color")) {
         if (streq(arg, "white")) con_fg = 0xFFFFFF;

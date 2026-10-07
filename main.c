@@ -61,7 +61,8 @@ static void fill(const struct fb *f, u32 rgb) {
 
 #include "rlog.h"
 #include "console.h"
-#define VERSION "wave-os v0.8.1"
+#define VERSION "wave-os v0.9"
+#include "err.h"
 #include "sys.h"
 #include "probe.h"
 #include "display.h"
@@ -89,6 +90,8 @@ void main(const u8 *dtb) {
 #endif
     dt_scan(dtb);
     int have_log = rlog_init();
+    status_reserve();                         // first log line: filled in as errors happen
+    status_update();
 
     puts(VERSION " diagnostic log\n");
     puts("EL"); put_dec(current_el()); puts("  dtb "); put_hex((u64)dtb); puts(" size "); put_dec(be32(dtb + 4));
@@ -98,6 +101,8 @@ void main(const u8 *dtb) {
     puts("ramoops ("); puts(rlog_src); puts("): "); puts(have_log ? "zone " : "not usable "); put_hex(rlog_zone); puts(" size "); put_hex(rlog_zone_size);
     puts(" rec "); put_hex(dti.rec_size); puts(" con "); put_hex(dti.con_size); puts(" ftrace "); put_hex(dti.ftrace_size);
     puts(" pmsg "); put_hex(dti.pmsg_size); puts(" ecc "); put_dec(dti.ecc_size); putc('\n');
+    if (!dti.nodes) err("BOOT", 1, "device tree unreadable (nothing valid at x0)");
+    if (!have_log) err("LOG", 1, "ramoops log area not usable: this boot leaves no log");
 
     // Firmware's coreboot table (may record the framebuffer the firmware drew on)
     struct cbfb cb; u64 cbt = 0;
@@ -140,7 +145,7 @@ void main(const u8 *dtb) {
         con_init(&f);                         // from here, text also goes to the screen
         puts(VERSION "\nscreen from "); puts(src); putc('\n');
     } else {
-        puts("screen: none found\n");
+        err("DISP", 1, "no screen found (device tree, coreboot table, display registers)");
     }
 
     // Register dumps go to the log only (scrolling the screen is slow with caches off)
@@ -163,7 +168,7 @@ void main(const u8 *dtb) {
 
 #ifndef QEMU
     puts("turning on backlight (GPIO32, pin87, GPIO95) and overlay engine (OVL0_EN)\n");
-    if (src) display_on(&f);
+    if (src && !display_on(&f)) err("DISP", 2, "display restarted but no frames reach the panel");
     puts("after:\n");
     dump("ovl0", 0x1400c000UL, ovl_en, 1);
     dump("gpio", 0x10005000UL, gpio_regs, 10);
@@ -176,18 +181,21 @@ void main(const u8 *dtb) {
     con_clear();
     con_fg = 0x40FF40;
     puts(VERSION "\n\n");
+    con_fg = 0xFFE040;
+    if (err_count) { con_on = 1; list_errors(); con_on = screen; }   // codes from before the screen was up
     con_fg = 0xFFFFFF;
     puts("keyboard...\n");
     wdt_kick();
     if (!kb_init()) {
         con_fg = 0xFFE040;
-        puts("\nkeyboard: the EC did not answer. Rebooting in 20 s so the log is kept;\n");
-        puts("then Ctrl+D and read /sys/fs/pstore/console-ramoops-0\n");
+        puts("\nNo keyboard. Codes above are explained in ERRORS.md.\n");
+        puts("Rebooting in 20 s so the log is kept; then Ctrl+D and run:\n");
+        puts("  sudo head -3 /sys/fs/pstore/console-ramoops-0\n");
         wdt_kick();
         delay_s(20);
         reboot();
     }
-    puts("\ntype help (reboot: restart; log in ChromeOS pstore)\n\n");
+    puts("\ntype help   (errors: list error codes; reboot: restart and keep the log)\n\n");
 #else
     puts("type help (typing goes in the Ubuntu terminal)\n\n");
 #endif

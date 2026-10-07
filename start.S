@@ -35,6 +35,22 @@ entry:
 1:  mov     x2, #(3 << 20)
     msr     cpacr_el1, x2
 2:  isb
+    // Self-relocate: we are linked at 0 but run wherever the firmware put us. Every stored
+    // address (pointer tables, switch tables, static pointers) is listed in .rela.dyn as
+    // R_AARCH64_RELATIVE: *(base + offset) = base + addend.
+    adr     x0, _start                  // runtime base
+    adr     x1, __rela_start
+    adr     x2, __rela_end
+7:  cmp     x1, x2
+    b.hs    8f
+    ldp     x3, x4, [x1], #16           // r_offset, r_info
+    ldr     x5, [x1], #8                // r_addend
+    cmp     w4, #1027                   // R_AARCH64_RELATIVE
+    b.ne    7b
+    add     x5, x5, x0
+    str     x5, [x0, x3]
+    b       7b
+8:
     // Zero BSS (PC-relative)
     adr     x0, __bss_start
     adr     x1, __bss_end

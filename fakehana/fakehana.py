@@ -338,6 +338,17 @@ class Machine:
         data = bytes(self.uc.mem_read(zone + 12, size))
         return (data[start:size] + data[:start]).decode(errors='replace')
 
+    def status_line(self):
+        """The 'status:' line wave-os keeps at the top of its ramoops log (RAM still present)."""
+        r = RAMOOPS
+        dump = r['size'] - r['console'] - r['pmsg']
+        zone = r['base'] + (dump // r['record']) * r['record']
+        sig, start, size = struct.unpack('<III', self.uc.mem_read(zone, 12))
+        if sig != 0x43474244 or not size:
+            return None
+        first = bytes(self.uc.mem_read(zone + 12, min(size, 200))).split(b'\n')[0].decode(errors='replace')
+        return first.strip() if first.startswith('status:') else None
+
     def screen_png(self, path):
         ovl = 0xc000
         addr = self.regs.get(('mmsys', ovl + 0xf40), 0)
@@ -369,6 +380,7 @@ def main():
     ap.add_argument('--wdt-keeps-ram', action='store_true', help='a watchdog reset keeps RAM (default: wipes it)')
     ap.add_argument('--keys', help='text typed on the fake keyboard, e.g. "help\\n" (starts 1 s after boot)')
     ap.add_argument('--run-seconds', type=float, help='stop at this fake time')
+    ap.add_argument('--ec', choices=['on', 'off'], default='on', help='scenario: the EC answers, or stays silent')
     ap.add_argument('--max-insns', type=int, default=600_000_000)
     ap.add_argument('--png', default='fakehana-screen.png')
     ap.add_argument('--mmio', action='store_true', help='print every register access')
@@ -404,6 +416,9 @@ def main():
         print('  (%d register accesses; --mmio to list them)' % m.mmio_count)
     kind, why, ram_kept = m.end
     print('  END: %s -- %s   [fake time %.1f s]' % (kind, why, m.ticks / TIMER_HZ))
+    st = m.status_line()
+    if st:
+        print('  wave-os ' + st + '   (codes: ERRORS.md)')
     if kind == 'FREEZE' and m.wdt['armed_at'] is not None:
         print('       ...then the armed watchdog reboots it after %d s (RAM wiped)' % m.wdt['timeout_s'])
         kind = 'REBOOT'

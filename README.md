@@ -3,9 +3,9 @@
 A tiny bare-metal aarch64 operating system that boots on the **Lenovo MT8173 "hana" Chromebook**
 (IdeaPad Flex 3 CB-11M735 class, firmware `Google_Hana.8438`), from a USB stick, in developer mode.
 
-**Status (v0.7):** boots from USB, takes over the firmware's screen, turns the backlight back on and
-draws text with its own font. A shell with line editing works in QEMU; keyboard input on the real
-machine (Chrome EC over SPI) is the next step.
+**Status (v0.9):** boots from USB, takes over the firmware's screen, turns the backlight back on,
+draws text with its own font, and reads the real keyboard through the Chrome EC (SPI): you can type
+commands at a `wave>` prompt. Problems show up as short codes like `KB-05`: see [ERRORS.md](ERRORS.md).
 
 ## How it boots
 

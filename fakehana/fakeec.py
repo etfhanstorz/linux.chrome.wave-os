@@ -63,6 +63,8 @@ class FakeEC:
 
     def byte(self, b):
         """Host clocks one byte in; return the byte the EC clocks out."""
+        if getattr(self.m.a, 'ec', 'on') == 'off':
+            return 0xff                                      # scenario: EC silent (line idles high)
         if self.out:
             return self.out.pop(0)
         if self.need is not None and len(self.rx) >= self.need:
