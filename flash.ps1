@@ -20,11 +20,11 @@ if (-not $isAdmin -and -not $DryRun) {
 }
 
 try { Start-Transcript -Path (Join-Path $PSScriptRoot 'flash.log') -Force | Out-Null } catch {}
-trap { Write-Host "`nERROR: $_" -ForegroundColor Red; Read-Host "`nPress Enter to close"; exit 1 }
+trap { Write-Host "`nERROR: $_" -ForegroundColor Red; try { Stop-Transcript | Out-Null } catch {}; Read-Host "`nPress Enter to close"; exit 1 }
 $kpart = Join-Path $PSScriptRoot $Image
 $KERNEL_GUID = 'FE3A2A5D-4F32-41A7-B725-ACCC3285A309'   # ChromeOS kernel partition type
 
-function Stop-Here($msg) { Write-Host "`nSTOPPED: $msg" -ForegroundColor Red; Read-Host "`nPress Enter to close"; exit 1 }
+function Stop-Here($msg) { Write-Host "`nSTOPPED: $msg" -ForegroundColor Red; try { Stop-Transcript | Out-Null } catch {}; Read-Host "`nPress Enter to close"; exit 1 }
 
 if (-not (Test-Path $kpart)) { Stop-Here "out.kpart not found. The build step failed." }
 $data = [IO.File]::ReadAllBytes($kpart)
@@ -50,7 +50,7 @@ if ($p1.Size -lt $padded.Length) { Stop-Here "Kernel partition ($($p1.Size) byte
 Write-Host "Target: partition $($p1.PartitionNumber), offset $($p1.Offset), size $([math]::Round($p1.Size/1MB,1)) MB (ChromeOS kernel type)"
 Write-Host "Other partitions on the stick are NOT touched.`n"
 
-if ($DryRun) { Write-Host "Dry run: nothing written." -ForegroundColor Green; Read-Host "`nPress Enter to close"; exit 0 }
+if ($DryRun) { Write-Host "Dry run: nothing written." -ForegroundColor Green; try { Stop-Transcript | Out-Null } catch {}; Read-Host "`nPress Enter to close"; exit 0 }
 
 $ans = Read-Host "Type YES to write wave-os to Disk $($disk.Number) now"
 if ($ans -cne 'YES') { Stop-Here "Cancelled. Nothing was written." }
@@ -69,5 +69,5 @@ try {
 
 if ($read -ne $padded.Length -or [Convert]::ToBase64String($back) -ne [Convert]::ToBase64String($padded)) { Stop-Here "Write verification FAILED. Do not use this stick; run again." }
 Write-Host "`nDONE. Verified $($padded.Length) bytes written." -ForegroundColor Green
-Write-Host "Eject the stick, plug it into the Chromebook, reboot, and press Ctrl+U at the screen."
+Write-Host "Eject the stick, plug it into the Chromebook, reboot, and press Ctrl+U at the screen."; try { Stop-Transcript | Out-Null } catch {}
 Read-Host "`nPress Enter to close"
