@@ -297,7 +297,7 @@ static int sdio_write_port(u32 addr, const u8 *data, u32 blocks) {
 
 // CMD53 block read from function 1, fixed address. len = blocks * 256 bytes into out. Returns 0 or error.
 static u32 rd_got, rd_hw_timeout;        // last read: bytes that arrived, and whether the controller's own data timeout fired
-static int sdio_read_port(u32 addr, u8 *out, u32 blocks) {
+static int sdio_read_port1(u32 addr, u8 *out, u32 blocks) {
     u32 len = blocks * 256, got = 0;
     u32 save_div = (msdc_rd(MSDC_CFG) >> 8) & 0xff;
     if (blocks > 1) msdc_set_clock(32);                              // big PIO reads: the FIFO is drained by hand, so slow the bus down (v1.19: data timeout on a 7-block read)
@@ -331,6 +331,18 @@ static int sdio_read_port(u32 addr, u8 *out, u32 blocks) {
     return 0;
 }
 
+// Multi-block PIO reads never complete on this controller (v1.20-v1.24: data timeout on every 7-block read, while
+// single-block reads always work). The port is a FIFO, so read a packet one 256-byte block at a time instead.
+static u32 rd_total;                     // bytes of the current packet that arrived before a failure
+static int sdio_read_port(u32 addr, u8 *out, u32 blocks) {
+    rd_total = 0;
+    for (u32 b = 0; b < blocks; b++) {
+        int e = sdio_read_port1(addr, out + b * 256, 1);
+        if (e) return e;
+        rd_total += 256;
+    }
+    return 0;
+}
 static int fn1_rd(u32 reg) { return sdio_read_byte(1, reg); }
 static int fn1_wr(u32 reg, u32 v) { return sdio_write_byte(1, reg, v); }
 
@@ -559,7 +571,7 @@ static int wifi_cmd_err(const char *name, int r, u32 sub_base) {
     else {
         puts("malformed answer");
         if (w3_why == 1) { puts(": packet length "); put_dec(w3_a); puts(" is unusable"); }
-        else if (w3_why == 2) { puts(": reading the "); put_dec(w3_b); puts("-byte packet failed (controller error "); put_dec(w3_a); puts("), "); put_dec(rd_got); puts(" bytes arrived, "); puts(rd_hw_timeout ? "controller timeout" : "our own 0.5 s timeout"); }
+        else if (w3_why == 2) { puts(": reading the "); put_dec(w3_b); puts("-byte packet failed (controller error "); put_dec(w3_a); puts("), "); put_dec(rd_total + rd_got); puts(" bytes arrived, "); puts(rd_hw_timeout ? "controller timeout" : "our own 0.5 s timeout"); }
         putc('\n'); errs("WIFI", 12, 3, "the Wi-Fi firmware's answer was not understood"); }
     return 0;
 }
