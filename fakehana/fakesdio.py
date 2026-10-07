@@ -195,6 +195,8 @@ class FakeFirmwareLoader:
         if r == 0x03:
             self.acked = True                            # reading the status register acknowledges the boot interrupt
             v, self.int_status = (self.int_status or 0x01), 0    # reset on read
+            if v == 0x40:
+                return 0                                 # MODEL (real hana, v1.15): the packet-ready bit is not reliably seen; only the length register shows it
             return v if self.mask & 0x40 or v == 0x01 else 0
         if r == 0x02:
             return self.mask

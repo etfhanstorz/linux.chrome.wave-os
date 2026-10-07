@@ -434,11 +434,23 @@ bad:
 // New-mode command port = MEM_PORT | CMD_PORT_SLCT = 0x18000, fixed address, block mode.
 #define WCMD_PORT 0x18000
 #define UP_LD_CMD_PORT_INT 0x40
+// Is a packet waiting on the command port? The status bit (0x03, read-to-clear) is easy to miss, so also look at the
+// packet-length registers 0xb4/0xb5 (v1.15 on hana: no status bit, but a 0x700-byte packet was sitting there).
+static u32 wifi_last_len;
+static int cmd_packet_waiting(int st);
 static u8 wbuf[2312 + 256 + 256];
 static u16 wifi_seq;
 static void (*wifi_event_hook)(const u8 *ev, u32 len);   // called for firmware events seen while waiting
 static u32 wifi_cmd_ms = 1000;          // how long to wait for an answer (scans need longer)
 
+static int cmd_packet_waiting(int st) {
+    if (st >= 0 && (st & UP_LD_CMD_PORT_INT)) return 1;
+    int l0 = fn1_rd(0xb4), l1 = fn1_rd(0xb5);
+    if (l0 < 0 || l1 < 0) return 0;
+    u32 len = ((u32)l1 << 8) | (u32)l0;
+    if (!len) { wifi_last_len = 0; return 0; }
+    return len != wifi_last_len;                                   // a length we have not read yet
+}
 static void put16(u8 *p, u32 v) { p[0] = v; p[1] = v >> 8; }
 static u32 get16(const u8 *p) { return p[0] | (p[1] << 8); }
 
@@ -457,10 +469,11 @@ static int wifi_cmd(u32 cmd, const u8 *body, u32 blen, u8 *resp, u32 rmax, u32 *
     u64 hz = tick_hz(), t0 = ticks();
     for (;;) {
         int st = fn1_rd(0x03);                                     // host interrupt status
-        if (st >= 0 && (st & UP_LD_CMD_PORT_INT)) {
+        if (cmd_packet_waiting(st)) {
             int l0 = fn1_rd(0xb4), l1 = fn1_rd(0xb5);              // length of the waiting packet
             if (l0 < 0 || l1 < 0) return -2;
             u32 rx = ((u32)l1 << 8) | (u32)l0;
+            wifi_last_len = rx;
             u32 blocks = (rx + 255) / 256;
             if (rx <= 4 || blocks * 256 > sizeof wbuf) return -3;
             if (sdio_read_port(WCMD_PORT, wbuf, blocks)) return -3;
@@ -594,9 +607,10 @@ static void wifi_poll_events(u32 ms) {
     u64 hz = tick_hz(), t0 = ticks();
     while (!scan_done && hz && ticks() - t0 < hz / 1000 * ms) {
         int st = fn1_rd(0x03);
-        if (st >= 0 && (st & UP_LD_CMD_PORT_INT)) {
+        if (cmd_packet_waiting(st)) {
             int l0 = fn1_rd(0xb4), l1 = fn1_rd(0xb5);
             u32 rx = ((u32)(l1 < 0 ? 0 : l1) << 8) | (u32)(l0 < 0 ? 0 : l0), blocks = (rx + 255) / 256;
+            wifi_last_len = rx;
             if (rx > 4 && blocks * 256 <= sizeof wbuf && !sdio_read_port(WCMD_PORT, wbuf, blocks) && get16(wbuf + 2) == 3 && wifi_event_hook)
                 wifi_event_hook(wbuf + 4, get16(wbuf) > 4 ? get16(wbuf) - 4 : 0);
         } else delay_us(500);
