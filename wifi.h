@@ -334,6 +334,7 @@ static int sdio_read_port1(u32 addr, u8 *out, u32 blocks) {
 // Multi-block PIO reads never complete on this controller (v1.20-v1.24: data timeout on every 7-block read, while
 // single-block reads always work). The port is a FIFO, so read a packet one 256-byte block at a time instead.
 static u32 rd_total;                     // bytes of the current packet that arrived before a failure
+static u32 rd_slow_div = 64;             // bus clock divider used for big reads (higher = slower)
 static int wifi_read_bytes = 1;          // 1 = read a packet in BYTE mode (up to 512 bytes per transfer; clean on hana), 0 = as 256-byte blocks (garbled results on hana)
 static u32 dbg_starts[8], dbg_blocks, dbg_taken;   // first 4 bytes of each 256-byte block of the first big packet (scan diagnostics)
 
@@ -375,12 +376,17 @@ static int sdio_read_port(u32 addr, u8 *out, u32 blocks) {
     rd_total = 0;
     if (wifi_read_bytes) {
         u32 len = blocks * 256;
-        for (u32 off = 0; off < len; off += 512) {
-            u32 n = len - off < 512 ? len - off : 512;
+        u32 save_div = (msdc_rd(MSDC_CFG) >> 8) & 0xff;
+        if (len > 256) msdc_set_clock(rd_slow_div);                     // big packets: I drain the FIFO by hand, so slow the bus (data went missing mid-packet at full speed)
+        int fail = 0;
+        for (u32 off = 0; off < len && !fail; off += 256) {
+            u32 n = len - off < 256 ? len - off : 256;
             int e = sdio_read_bytes_once(addr, out + off, n);
-            if (e) return e;
+            if (e) { fail = e; break; }
             rd_total += n;
         }
+        if (len > 256) msdc_set_clock(save_div);
+        if (fail) return fail;
     } else {
         for (u32 b = 0; b < blocks; b++) {
             int e = sdio_read_port1(addr, out + b * 256, 1);
@@ -506,7 +512,7 @@ bad:
 // packet-length registers 0xb4/0xb5 (v1.15 on hana: no status bit, but a 0x700-byte packet was sitting there).
 static u32 wifi_last_len;
 static u32 scan_done, scan_events;
-static u32 ev_log, ev_sets[12], ev_more[12], ev_size[12], ev_len[12], recs_seen;
+static u32 ev_log, ev_sets[12], ev_more[12], ev_size[12], ev_len[12], ev_stop[12], recs_seen;
 static u8 raw_rec[40]; static u32 raw_len, raw_taken;   // raw bytes of the first scan record (diagnostics)        // set by the scan event handler (defined further down)
 static u32 w1_err, w1_tries;              // last failed command write: controller error, attempts made
 static u32 w3_why, w3_a, w3_b;           // why a command answer was 'malformed': 1 = bad length (a), 2 = block read failed with error a for length b
@@ -701,6 +707,7 @@ static void scan_event(const u8 *ev, u32 len) {
     if (ev_log < 12) { ev_sets[ev_log] = ev[10]; ev_more[ev_log] = ev[4]; ev_size[ev_log] = get16(ev + 8); ev_len[ev_log] = len; ev_log++; }
     u32 size = get16(ev + 8), left = len - 11 < size ? len - 11 : size;
     const u8 *t = ev + 11;
+    u32 left0 = left;
     struct ap *cur = 0;
     while (left >= 4) {
         u32 type = get16(t), tl = get16(t + 2);
@@ -733,6 +740,7 @@ static void scan_event(const u8 *ev, u32 len) {
         }
         t += 4 + tl; left -= 4 + tl;
     }
+    if (ev_log > 0 && ev_log <= 12) ev_stop[ev_log - 1] = left0 - left;       // how far the TLV walk got
     if (ev[4] == 0) scan_done = 1;                                  // more_event == 0: that was the last report
 }
 
@@ -804,7 +812,7 @@ static int wifi_scan(int with5) {
     if (!scan_events && !nap) return 0;                              // nothing at all: the error above says why
     if (raw_taken) { puts("first record: block length "); put_dec(raw_len); puts(", bytes:"); for (u32 q = 0; q < 40; q++) { puts(" "); putc("0123456789abcdef"[raw_rec[q] >> 4]); putc("0123456789abcdef"[raw_rec[q] & 15]); } putc('\n'); }
     if (dbg_taken) { puts("first big packet, block starts:"); for (u32 b = 0; b < dbg_blocks; b++) { putc(' '); put_hex(dbg_starts[b]); } putc('\n'); }
-    for (u32 i = 0; i < ev_log; i++) { puts("  event "); put_dec(i + 1); puts(": "); put_dec(ev_sets[i]); puts(" networks, more "); put_dec(ev_more[i]); puts(", size "); put_dec(ev_size[i]); puts("/"); put_dec(ev_len[i]); putc('\n'); }
+    for (u32 i = 0; i < ev_log; i++) { puts("  event "); put_dec(i + 1); puts(": "); put_dec(ev_sets[i]); puts(" networks, more "); put_dec(ev_more[i]); puts(", size "); put_dec(ev_size[i]); puts("/"); put_dec(ev_len[i]); puts(", stop "); put_dec(ev_stop[i]); putc('\n'); }
     puts("scan records seen: "); put_dec(recs_seen); putc('\n');
     puts("scan events received: "); put_dec(scan_events); puts(" ("); put_dec(scan_bytes); puts(" bytes)\n");
     if (!scan_events) errs("WIFI", 14, 3, "the scan finished but the firmware sent no scan results");
