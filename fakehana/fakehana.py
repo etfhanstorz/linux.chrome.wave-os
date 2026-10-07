@@ -128,7 +128,7 @@ class Machine:
         self.pwrap_fsm, self.pwrap_data = 0, 0
         fw_path = args.firmware
         fw = open(fw_path, 'rb').read() if os.path.exists(fw_path) else None
-        self.msdc = FakeMSDC(self, self.regs, fw)
+        self.msdc = FakeMSDC(self, self.regs, fw, args.fw_running)
         self.timer_hz = TIMER_HZ
         self.keys = KeyScript(args.keys.encode().decode('unicode_escape')) if args.keys else None
         self.ec = FakeEC(self, self.keys)
@@ -431,6 +431,8 @@ def main():
     ap.add_argument('--keys', help='text typed on the fake keyboard, e.g. "help\\n" (starts 1 s after boot)')
     ap.add_argument('--run-seconds', type=float, help='stop at this fake time')
     ap.add_argument('--spi-stall', type=int, default=0, help='scenario: the first N SPI packets never complete')
+    ap.add_argument('--fw-running', action='store_true', default=True, help='the chip comes up with its firmware already running (real hana)')
+    ap.add_argument('--fw-cold', dest='fw_running', action='store_false', help='the chip boots from ROM and needs the firmware uploaded')
     ap.add_argument('--ec', choices=['on', 'off'], default='on', help='scenario: the EC answers, or stays silent')
     ap.add_argument('--firmware', default=os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'fw', 'sd8897_uapsta.bin'),
                     help='the Wi-Fi firmware the fake chip checks the upload against')

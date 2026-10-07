@@ -314,6 +314,15 @@ static int wifi_fw(void) {
     if ((v = fn1_rd(0xcd)) < 0 || fn1_wr(0xcd, (u32)v | 1)) goto bad;   // CMD53 new mode
     if ((v = fn1_rd(0xb8)) < 0 || fn1_wr(0xb8, (u32)v | 4)) goto bad;   // cmd port: read length from register
     if ((v = fn1_rd(0xb9)) < 0 || fn1_wr(0xb9, (u32)v | 1)) goto bad;   // cmd port: auto reset
+    // Like Linux (mwifiex_dnld_fw): if the chip's firmware is already running there is nothing to upload.
+    // On the real hana the chip comes up running (v1.6: status 0xfedc, but it never asks for a download).
+    {
+        int a0 = fn1_rd(0xc0), a1 = fn1_rd(0xc1);
+        if (a0 >= 0 && a1 >= 0 && (((u32)a1 << 8) | (u32)a0) == 0xfedc) {
+            puts("  firmware status 0xfedc: the chip's Wi-Fi firmware is already RUNNING (nothing to upload).\n");
+            return 1;
+        }
+    }
     static u8 buf[2312 + 256];
     u32 offset = 0, blocks = 0, retries = 0, last_kb = 0;
     for (;;) {

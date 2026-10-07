@@ -68,8 +68,9 @@ class FakeCard:
 
 class FakeFirmwareLoader:
     """Function-1 registers of the 88W8897 boot ROM (numbers from Linux mwifiex_reg_sd8897)."""
-    def __init__(self, firmware):
+    def __init__(self, firmware, running=False):
         self.fw = firmware
+        self.running = running          # MODEL (real hana): the chip comes up with its firmware already running
         self.pos = 0                    # bytes of firmware received so far
         self.chunks = [24] + [2312, 1156, 2312, 1000, 2312, 256, 2310]   # sizes the ROM asks for, then repeats
         self.i = 0
@@ -95,13 +96,15 @@ class FakeFirmwareLoader:
             self.acked = True                            # reading the status register acknowledges the boot interrupt
             return 0x01
         if r == 0x50:
+            if self.running:
+                return 0x08                              # running firmware never asks for a download
             return 0x09 if self.ready() else 0x08        # card io ready (+ download ready)
         if r in (0x60, 0x61):
             n = self.want() + (self.want() & 1)          # ROM reports even lengths
             n = self.want()
             return (n >> (8 * (r - 0x60))) & 0xff
         if r in (0xc0, 0xc1):
-            done = self.pos >= len(self.fw)
+            done = self.running or self.pos >= len(self.fw)
             return (0xfedc >> (8 * (r - 0xc0))) & 0xff if done else 0
         return self.cfg.get(r, 0)
 
@@ -124,12 +127,12 @@ class FakeFirmwareLoader:
         self.stats['bytes'] += n
 
 class FakeMSDC:
-    def __init__(self, machine, regs, firmware=None):
+    def __init__(self, machine, regs, firmware=None, fw_running=False):
         self.m = machine
         self.r = regs              # shared register dict in the machine, keys ('msdc3', off)
         self.card = FakeCard()
         self.commands = []         # (opcode, answered)
-        self.loader = FakeFirmwareLoader(firmware) if firmware else None
+        self.loader = FakeFirmwareLoader(firmware, fw_running) if firmware else None
         self.card.loader = self.loader
         self.tx = []               # bytes written to the TX FIFO for the current data command
         self.want_bytes = 0
