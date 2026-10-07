@@ -510,7 +510,8 @@ static int wifi_cmd(u32 cmd, const u8 *body, u32 blen, u8 *resp, u32 rmax, u32 *
             u32 rx = ((u32)l1 << 8) | (u32)l0;
             wifi_last_len = rx;
             u32 blocks = (rx + 255) / 256;
-            if (rx <= 4 || blocks * 256 > sizeof wbuf) { w3_why = 1; w3_a = rx; return -3; }
+            if (rx <= 4) { delay_us(200); continue; }                  // flag raised a moment before the length register updated: look again
+            if (blocks * 256 > sizeof wbuf) { w3_why = 1; w3_a = rx; return -3; }
             { int re = sdio_read_port(WCMD_PORT, wbuf, blocks); if (re) { w3_why = 2; w3_a = (u32)re; w3_b = rx; return -3; } }
             after_packet_read(rx);
             u32 type = get16(wbuf + 2);
