@@ -117,6 +117,17 @@ class FakeFirmwareLoader:
             body = b''
         elif cmd == 0x0003:                              # GET_HW_SPEC
             body = struct.pack('<HHHH6sHHI', 0x0001, 0x0067, 0, 32, bytes.fromhex('0050431a2b3c'), 0x10, 2, 0x0f444c11).ljust(63, b'\0')
+        elif cmd == 0x0028:                              # MAC_CONTROL: echo
+            body = d[12:12 + max(0, size - 8)]
+        elif cmd == 0x0006:                              # legacy SCAN: a few invented access points
+            aps = [(b'HomeNet', '02:11:22:33:44:01', 52, 6, True), (b'CoffeeShop-Guest', '02:11:22:33:44:02', 71, 1, False),
+                   (b'Neighbour5G', '02:11:22:33:44:03', 80, 149, True), (b'', '02:11:22:33:44:04', 85, 11, True)]
+            recs = b''
+            for ssid, mac, rssi, ch, sec in aps:
+                ies = bytes([0, len(ssid)]) + ssid + bytes([3, 1, ch]) + (bytes([48, 4, 1, 0, 0, 0]) if sec else b'')
+                rec = bytes.fromhex(mac.replace(':', '')) + bytes([rssi]) + struct.pack('<QHH', 123456789, 100, 0x0411 if sec else 0x0401) + ies
+                recs += struct.pack('<H', len(rec)) + rec
+            body = struct.pack('<HB', len(recs), len(aps)) + recs
         else:
             result = 1
         resp = struct.pack('<HHHHHH', 12 + len(body), 1, cmd | 0x8000, 8 + len(body), seq, result) + body

@@ -436,6 +436,7 @@ bad:
 #define UP_LD_CMD_PORT_INT 0x40
 static u8 wbuf[2312 + 256 + 256];
 static u16 wifi_seq;
+static u32 wifi_cmd_ms = 1000;          // how long to wait for an answer (scans need longer)
 
 static void put16(u8 *p, u32 v) { p[0] = v; p[1] = v >> 8; }
 static u32 get16(const u8 *p) { return p[0] | (p[1] << 8); }
@@ -471,7 +472,7 @@ static int wifi_cmd(u32 cmd, const u8 *body, u32 blen, u8 *resp, u32 rmax, u32 *
             for (u32 i = 0; i < body_len && i < rmax; i++) resp[i] = wbuf[12 + i];
             return (int)get16(wbuf + 10);
         }
-        if (hz && ticks() - t0 > hz) {                             // 1 s
+        if (hz && ticks() - t0 > hz / 1000 * wifi_cmd_ms) {        // normally 1 s
             puts("  no answer. status 0x03 = "); put_hex((u32)st); puts(", mask 0x02 = "); put_hex((u32)fn1_rd(0x02));
             puts(", 0x50 = "); put_hex((u32)fn1_rd(0x50)); puts(", cmd length 0xb4/5 = "); put_hex((u32)fn1_rd(0xb4)); puts("/"); put_hex((u32)fn1_rd(0xb5)); putc('\n');
             return -2;
@@ -509,6 +510,7 @@ static void wifi_power_cycle(void) {
 
 // Wi-Fi step: make sure the chip is up, then run the firmware's init commands and print its MAC address.
 static u8 wifi_mac[6];
+static int wifi_ready;                  // FUNC_INIT + GET_HW_SPEC done in this boot
 static int wifi_hw_spec(void) {
     u8 r[96]; u32 n = 0;
     puts("talking to the Wi-Fi firmware...\n");
@@ -523,6 +525,7 @@ static int wifi_hw_spec(void) {
     puts("  Wi-Fi MAC address "); put_mac(wifi_mac); putc('\n');
     puts("  firmware release "); put_hex(fwver); puts(", antennas "); put_dec(get16(r + 16)); puts(", region "); put_hex(get16(r + 14)); putc('\n');
     puts("  the Wi-Fi firmware answers our commands.\n");
+    wifi_ready = 1;
     return 1;
 }
 
@@ -538,6 +541,73 @@ static int wifi_init(void) {
     r = wifi_hw_spec();
     if (r == -2) { wifi_cmd_err("FUNC_INIT", -2, 0); return 0; }
     return r == 1;
+}
+// ---- v1.11: scan for networks (legacy scan command 0x0006; answer layout: Linux mwifiex scan.c) ----
+static void scan_print_bss(const u8 *b, u32 size) {                // one record, after its 2-byte size
+    if (size < 6 + 1 + 12) return;
+    int rssi = -(int)b[6];                                          // stored as a positive magnitude
+    u32 cap = get16(b + 6 + 1 + 8 + 2);
+    const u8 *ie = b + 6 + 1 + 12, *end = b + size;
+    char ssid[34]; u32 sl = 0, chan = 0, wpa2 = 0, wpa = 0;
+    while (ie + 2 <= end && ie + 2 + ie[1] <= end) {
+        u32 id = ie[0], len = ie[1];
+        if (id == 0) { for (; sl < len && sl < 32; sl++) ssid[sl] = ie[2 + sl] >= 32 && ie[2 + sl] < 127 ? ie[2 + sl] : '?'; }
+        else if (id == 3 && len >= 1) chan = ie[2];
+        else if (id == 48) wpa2 = 1;
+        else if (id == 221 && len >= 4 && ie[2] == 0x00 && ie[3] == 0x50 && ie[4] == 0xf2 && ie[5] == 1) wpa = 1;
+        ie += 2 + len;
+    }
+    ssid[sl] = 0;
+    puts("  "); puts(sl ? ssid : "(hidden)");
+    for (u32 i = sl ? sl : 8; i < 24; i++) putc(' ');
+    puts(" ch "); put_dec(chan); puts("  "); putc('-'); put_dec((u64)-rssi); puts(" dBm  ");
+    puts(wpa2 ? "WPA2" : wpa ? "WPA" : (cap & 0x10) ? "WEP?" : "open"); putc('\n');
+}
+
+static int wifi_scan(void) {
+    if (!wifi_ready && !wifi_init()) return 0;
+    u8 r[8];
+    u32 n = 0;
+    static const u8 macctl[6] = {0x03, 0x00, 0x00, 0x00, 0x00, 0x00};   // MAC_CONTROL: receive + transmit on
+    int rc = wifi_cmd(0x0028, macctl, sizeof macctl, r, sizeof r, &n);
+    if (rc > 0) puts("  (MAC_CONTROL rejected; continuing)\n");
+    // scan command: mode "any", BSSID 0, wildcard SSID, channel list
+    static u8 body[7 + 5 + 4 + 6 * 24];
+    u32 p = 0;
+    body[p++] = 3;                                                  // BSS mode: any
+    for (u32 i = 0; i < 6; i++) body[p++] = 0;
+    put16(body + p, 0x0112); put16(body + p + 2, 1); body[p + 4] = 0; p += 5;   // wildcard SSID (match any)
+    static const u8 ch24[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
+    static const u8 ch5[] = {36, 40, 44, 48, 149, 153, 157, 161, 165};
+    u32 nch = sizeof ch24 + sizeof ch5;
+    put16(body + p, 0x0101); put16(body + p + 2, nch * 6); p += 4;              // channel list TLV
+    for (u32 i = 0; i < nch; i++) {
+        int fiveg = i >= sizeof ch24;
+        body[p] = fiveg ? 1 : 0;                                    // radio type: 0 = 2.4 GHz, 1 = 5 GHz
+        body[p + 1] = fiveg ? ch5[i - sizeof ch24] : ch24[i];
+        body[p + 2] = 0;                                            // active scan
+        put16(body + p + 3, 0); put16(body + p + 5 - 1 + 1, 110);   // min 0, max 110 ms per channel
+        p += 6;
+    }
+    puts("scanning "); put_dec(nch); puts(" channels...\n");
+    wifi_cmd_ms = 8000;
+    static u8 resp[2312];
+    n = 0;
+    rc = wifi_cmd(0x0006, body, p, resp, sizeof resp, &n);
+    wifi_cmd_ms = 1000;
+    if (!wifi_cmd_err("SCAN", rc, 0)) return 0;
+    if (n < 3) { errs("WIFI", 14, 1, "the scan answer was too short"); return 0; }
+    u32 bytes = get16(resp), sets = resp[2];
+    const u8 *q = resp + 3;
+    puts("found "); put_dec(sets); puts(" networks:\n");
+    for (u32 i = 0; i < sets && bytes >= 2; i++) {
+        u32 sz = get16(q);
+        q += 2; bytes -= 2;
+        if (!sz || sz > bytes) { errs("WIFI", 14, 2, "a scan record was malformed"); return 0; }
+        scan_print_bss(q, sz);
+        q += sz; bytes -= sz;
+    }
+    return 1;
 }
 static void wifi_probe(void) {
     puts("wifi probe (read-only): Marvell 88W8897 on SDIO/MSDC3\n");

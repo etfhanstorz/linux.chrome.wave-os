@@ -68,4 +68,5 @@ the EC sent back (`EC_RES_*` in Linux `cros_ec_commands.h`).
 | **WIFI-12.1** | Could not send a command to the Wi-Fi firmware (data write failed) | |
 | **WIFI-12.2** | The Wi-Fi firmware did not answer a command within 1 s | |
 | **WIFI-12.3** | The firmware's answer was not understood (wrong length, type or command) | |
-| **WIFI-13.1** | The Wi-Fi firmware rejected a command (an error number is printed above) | |
+| **WIFI-13.1** | The Wi-Fi firmware rejected a command (an error number is printed above) | || **WIFI-14.1** | The scan answer was too short | |
+| **WIFI-14.2** | A scan record in the answer was malformed | |
