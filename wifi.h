@@ -436,6 +436,7 @@ bad:
 #define UP_LD_CMD_PORT_INT 0x40
 static u8 wbuf[2312 + 256 + 256];
 static u16 wifi_seq;
+static void (*wifi_event_hook)(const u8 *ev, u32 len);   // called for firmware events seen while waiting
 static u32 wifi_cmd_ms = 1000;          // how long to wait for an answer (scans need longer)
 
 static void put16(u8 *p, u32 v) { p[0] = v; p[1] = v >> 8; }
@@ -464,7 +465,7 @@ static int wifi_cmd(u32 cmd, const u8 *body, u32 blen, u8 *resp, u32 rmax, u32 *
             if (rx <= 4 || blocks * 256 > sizeof wbuf) return -3;
             if (sdio_read_port(WCMD_PORT, wbuf, blocks)) return -3;
             u32 type = get16(wbuf + 2);
-            if (type == 3) continue;                               // an event, not our answer: keep waiting
+            if (type == 3) { if (wifi_event_hook) wifi_event_hook(wbuf + 4, get16(wbuf) > 4 ? get16(wbuf) - 4 : 0); continue; }   // an event: hand it on, keep waiting
             if (type != 1 || (get16(wbuf + 4) & 0x7fff) != cmd) return -3;
             u32 size = get16(wbuf + 6);
             u32 body_len = size > 8 ? size - 8 : 0;
@@ -543,69 +544,114 @@ static int wifi_init(void) {
     return r == 1;
 }
 // ---- v1.11: scan for networks (legacy scan command 0x0006; answer layout: Linux mwifiex scan.c) ----
-static void scan_print_bss(const u8 *b, u32 size) {                // one record, after its 2-byte size
-    if (size < 6 + 1 + 12) return;
-    int rssi = -(int)b[6];                                          // stored as a positive magnitude
-    u32 cap = get16(b + 6 + 1 + 8 + 2);
-    const u8 *ie = b + 6 + 1 + 12, *end = b + size;
-    char ssid[34]; u32 sl = 0, chan = 0, wpa2 = 0, wpa = 0;
-    while (ie + 2 <= end && ie + 2 + ie[1] <= end) {
-        u32 id = ie[0], len = ie[1];
-        if (id == 0) { for (; sl < len && sl < 32; sl++) ssid[sl] = ie[2 + sl] >= 32 && ie[2 + sl] < 127 ? ie[2 + sl] : '?'; }
-        else if (id == 3 && len >= 1) chan = ie[2];
-        else if (id == 48) wpa2 = 1;
-        else if (id == 221 && len >= 4 && ie[2] == 0x00 && ie[3] == 0x50 && ie[4] == 0xf2 && ie[5] == 1) wpa = 1;
-        ie += 2 + len;
+// Extended scan (what Linux uses on this chip): command 0x0107 = {u32 reserved, TLVs}. The command's answer carries
+// no results; they come as events (id 0x58) holding, per access point, a BSS_SCAN_RSP TLV {bssid, frame body} and a
+// BSS_SCAN_INFO TLV {rssi, ..., channel}.
+struct ap { u8 bssid[6]; char ssid[33]; u8 chan, sec; int rssi; };
+static struct ap aps[32];
+static u32 nap, scan_events, scan_done, scan_bytes;
+
+static void scan_event(const u8 *ev, u32 len) {
+    if (len < 11 || get16(ev) != 0x58) return;
+    scan_events++; scan_bytes += len;
+    u32 size = get16(ev + 8), left = len - 11 < size ? len - 11 : size;
+    const u8 *t = ev + 11;
+    struct ap *cur = 0;
+    while (left >= 4) {
+        u32 type = get16(t), tl = get16(t + 2);
+        if (left < 4 + tl) break;
+        if (type == 0x0156 && tl >= 6 + 12) {                      // BSS_SCAN_RSP: bssid[6] + frame body (ts8, interval2, cap2, IEs)
+            u32 k;
+            for (k = 0; k < nap; k++) { u32 same = 1; for (u32 m = 0; m < 6; m++) if (aps[k].bssid[m] != t[4 + m]) same = 0; if (same) break; }
+            if (k == nap && nap < 32) nap++;
+            cur = k < 32 ? &aps[k] : 0;
+            if (cur) {
+                for (u32 m = 0; m < 6; m++) cur->bssid[m] = t[4 + m];
+                cur->ssid[0] = 0; cur->chan = 0; cur->sec = 0; cur->rssi = 0;
+                u32 cap = get16(t + 4 + 6 + 10);
+                const u8 *ie = t + 4 + 6 + 12, *end = t + 4 + tl;
+                while (ie + 2 <= end && ie + 2 + ie[1] <= end) {
+                    u32 id = ie[0], l = ie[1];
+                    if (id == 0) { u32 q; for (q = 0; q < l && q < 32; q++) cur->ssid[q] = ie[2 + q] >= 32 && ie[2 + q] < 127 ? ie[2 + q] : '?'; cur->ssid[q] = 0; }
+                    else if (id == 3 && l >= 1) cur->chan = ie[2];
+                    else if (id == 48) cur->sec = 2;
+                    else if (id == 221 && l >= 4 && ie[2] == 0x00 && ie[3] == 0x50 && ie[4] == 0xf2 && ie[5] == 1 && cur->sec < 1) cur->sec = 1;
+                    ie += 2 + l;
+                }
+                if (!cur->sec && (cap & 0x10)) cur->sec = 3;
+            }
+        } else if (type == 0x0157 && tl >= 7 && cur) {             // BSS_SCAN_INFO: rssi(s16) anpi(2) cca(1) radio(1) channel(1)
+            cur->rssi = (short)get16(t + 4);
+            if (!cur->chan) cur->chan = t[4 + 6];
+        }
+        t += 4 + tl; left -= 4 + tl;
     }
-    ssid[sl] = 0;
-    puts("  "); puts(sl ? ssid : "(hidden)");
-    for (u32 i = sl ? sl : 8; i < 24; i++) putc(' ');
-    puts(" ch "); put_dec(chan); puts("  "); putc('-'); put_dec((u64)-rssi); puts(" dBm  ");
-    puts(wpa2 ? "WPA2" : wpa ? "WPA" : (cap & 0x10) ? "WEP?" : "open"); putc('\n');
+    if (ev[4] == 0) scan_done = 1;                                  // more_event == 0: that was the last report
+}
+
+// Wait up to `ms` for events on the command port, handing each to the hook, until a scan finishes.
+static void wifi_poll_events(u32 ms) {
+    u64 hz = tick_hz(), t0 = ticks();
+    while (!scan_done && hz && ticks() - t0 < hz / 1000 * ms) {
+        int st = fn1_rd(0x03);
+        if (st >= 0 && (st & UP_LD_CMD_PORT_INT)) {
+            int l0 = fn1_rd(0xb4), l1 = fn1_rd(0xb5);
+            u32 rx = ((u32)(l1 < 0 ? 0 : l1) << 8) | (u32)(l0 < 0 ? 0 : l0), blocks = (rx + 255) / 256;
+            if (rx > 4 && blocks * 256 <= sizeof wbuf && !sdio_read_port(WCMD_PORT, wbuf, blocks) && get16(wbuf + 2) == 3 && wifi_event_hook)
+                wifi_event_hook(wbuf + 4, get16(wbuf) > 4 ? get16(wbuf) - 4 : 0);
+        } else delay_us(500);
+    }
+}
+
+static int scan_band(u32 radio, const u8 *chans, u32 nch) {
+    static u8 body[4 + 5 + 5 + 4 + 6 * 16 + 6 + 4 + 14];
+    static const u8 rates24[] = {0x82, 0x84, 0x8b, 0x96, 0x0c, 0x12, 0x18, 0x24, 0x30, 0x48, 0x60, 0x6c};
+    static const u8 rates5[] = {0x8c, 0x12, 0x98, 0x24, 0xb0, 0x48, 0x60, 0x6c};
+    u32 p = 0;
+    put16(body, 0); put16(body + 2, 0); p = 4;                      // u32 reserved
+    put16(body + p, 0x01ce); put16(body + p + 2, 1); body[p + 4] = 3; p += 5;            // BSS mode TLV: any
+    put16(body + p, 0x0112); put16(body + p + 2, 1); body[p + 4] = 0; p += 5;            // wildcard SSID TLV
+    put16(body + p, 0x0101); put16(body + p + 2, nch * 6); p += 4;                       // channel list TLV
+    for (u32 i = 0; i < nch; i++) {
+        body[p] = radio; body[p + 1] = chans[i]; body[p + 2] = 0x02;                      // active, channel filter disabled
+        put16(body + p + 3, 0); put16(body + p + 5, 110); p += 6;
+    }
+    const u8 *rt = radio ? rates5 : rates24; u32 rn = radio ? sizeof rates5 : sizeof rates24;
+    put16(body + p, 0x0001); put16(body + p + 2, rn); p += 4;                            // supported rates TLV
+    for (u32 i = 0; i < rn; i++) body[p++] = rt[i];
+    put16(body + p, 0x01c5); put16(body + p + 2, 2); put16(body + p + 4, 50); p += 6;    // gap between channels: 50 TU
+    u8 r[8]; u32 n = 0;
+    scan_done = 0;
+    int rc = wifi_cmd(0x0107, body, p, r, sizeof r, &n);
+    if (!wifi_cmd_err("SCAN", rc, 0)) return 0;
+    wifi_poll_events(6000);
+    return 1;
 }
 
 static int wifi_scan(void) {
     if (!wifi_ready && !wifi_init()) return 0;
-    u8 r[8];
-    u32 n = 0;
+    u8 r[8]; u32 n = 0;
     static const u8 macctl[6] = {0x13, 0x00, 0x00, 0x00, 0x00, 0x00};   // MAC_CONTROL: receive + transmit + Ethernet-II (Linux default packet filter)
     int rc = wifi_cmd(0x0028, macctl, sizeof macctl, r, sizeof r, &n);
     if (rc > 0) puts("  (MAC_CONTROL rejected; continuing)\n");
-    // scan command: mode "any", BSSID 0, wildcard SSID, channel list
-    static u8 body[7 + 5 + 4 + 6 * 24];
-    u32 p = 0;
-    body[p++] = 3;                                                  // BSS mode: any
-    for (u32 i = 0; i < 6; i++) body[p++] = 0;
-    put16(body + p, 0x0112); put16(body + p + 2, 1); body[p + 4] = 0; p += 5;   // wildcard SSID (match any)
     static const u8 ch24[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
     static const u8 ch5[] = {36, 40, 44, 48, 149, 153, 157, 161, 165};
-    u32 nch = sizeof ch24 + sizeof ch5;
-    put16(body + p, 0x0101); put16(body + p + 2, nch * 6); p += 4;              // channel list TLV
-    for (u32 i = 0; i < nch; i++) {
-        int fiveg = i >= sizeof ch24;
-        body[p] = fiveg ? 1 : 0;                                    // radio type: 0 = 2.4 GHz, 1 = 5 GHz
-        body[p + 1] = fiveg ? ch5[i - sizeof ch24] : ch24[i];
-        body[p + 2] = 0x02;                                         // active scan, channel filter disabled (Linux MWIFIEX_DISABLE_CHAN_FILT)
-        put16(body + p + 3, 0); put16(body + p + 5 - 1 + 1, 110);   // min 0, max 110 ms per channel
-        p += 6;
-    }
-    puts("scanning "); put_dec(nch); puts(" channels...\n");
-    wifi_cmd_ms = 8000;
-    static u8 resp[2312];
-    n = 0;
-    rc = wifi_cmd(0x0006, body, p, resp, sizeof resp, &n);
-    wifi_cmd_ms = 1000;
-    if (!wifi_cmd_err("SCAN", rc, 0)) return 0;
-    if (n < 3) { errs("WIFI", 14, 1, "the scan answer was too short"); return 0; }
-    u32 bytes = get16(resp), sets = resp[2];
-    const u8 *q = resp + 3;
-    puts("found "); put_dec(sets); puts(" networks:\n");
-    for (u32 i = 0; i < sets && bytes >= 2; i++) {
-        u32 sz = get16(q);
-        q += 2; bytes -= 2;
-        if (!sz || sz > bytes) { errs("WIFI", 14, 2, "a scan record was malformed"); return 0; }
-        scan_print_bss(q, sz);
-        q += sz; bytes -= sz;
+    nap = 0; scan_events = 0; scan_bytes = 0;
+    wifi_event_hook = scan_event;
+    puts("scanning 2.4 GHz...\n");
+    int ok = scan_band(0, ch24, sizeof ch24);
+    if (ok) { puts("scanning 5 GHz...\n"); ok = scan_band(1, ch5, sizeof ch5); }
+    wifi_event_hook = 0;
+    if (!ok) return 0;
+    puts("scan events received: "); put_dec(scan_events); puts(" ("); put_dec(scan_bytes); puts(" bytes)\n");
+    if (!scan_events) errs("WIFI", 14, 3, "the scan finished but the firmware sent no scan results");
+    puts("found "); put_dec(nap); puts(" networks:\n");
+    for (u32 i = 0; i < nap; i++) {
+        puts("  "); puts(aps[i].ssid[0] ? aps[i].ssid : "(hidden)");
+        u32 l = aps[i].ssid[0] ? 0 : 8; while (aps[i].ssid[l]) l++;
+        for (; l < 24; l++) putc(' ');
+        puts(" ch "); put_dec(aps[i].chan); puts("  "); putc('-'); put_dec((u64)(aps[i].rssi < 0 ? -aps[i].rssi : aps[i].rssi)); puts(" dBm  ");
+        puts(aps[i].sec == 2 ? "WPA2" : aps[i].sec == 1 ? "WPA" : aps[i].sec == 3 ? "WEP?" : "open"); putc('\n');
     }
     return 1;
 }

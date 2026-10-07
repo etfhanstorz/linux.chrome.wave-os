@@ -81,6 +81,7 @@ class FakeFirmwareLoader:
         self.mask = 0                    # reg 0x02: host interrupt mask (MODEL: status bits only show when unmasked, as in Linux mwifiex)
         self.int_status = 0              # reg 0x03: bit 6 = a packet waits on the command port
         self.cmd_resp = b''
+        self.queue = []                  # packets waiting for the host on the command port (answers + events)
         self.cmds = []                   # host commands seen: (command, result)
         self.mask = 0                    # reg 0x02: host interrupt mask (MODEL: status bits only show when unmasked, as in Linux mwifiex)
         self.int_status = 0              # reg 0x03: bit 6 = a packet waits on the command port\n        self.cmd_resp = b''\n        self.cmds = []                   # host commands seen: (command, result)\n        self.acked = False              # MODEL: the ROM signals "download ready" only after the host
@@ -102,7 +103,7 @@ class FakeFirmwareLoader:
         self.running = self.hung = False
         self.pos = 0; self.i = 0; self.acked = False
         self.cfg = {0xcd: 0, 0xb8: 0, 0xb9: 0, 0x01: 0, 0xcc: 0}
-        self.mask = 0; self.int_status = 0; self.cmd_resp = b''
+        self.mask = 0; self.int_status = 0; self.cmd_resp = b''; self.queue = []
         self.cold_boots = getattr(self, 'cold_boots', 0) + 1
 
     def host_command(self, d):
@@ -113,12 +114,40 @@ class FakeFirmwareLoader:
         cmd, size, seq, _ = struct.unpack_from('<HHHH', d, 4)
         body = b''
         result = 0
+        extra_events = []
         if cmd == 0x00a9:                                # FUNC_INIT
             body = b''
         elif cmd == 0x0003:                              # GET_HW_SPEC
             body = struct.pack('<HHHH6sHHI', 0x0001, 0x0067, 0, 32, bytes.fromhex('0050431a2b3c'), 0x10, 2, 0x0f444c11).ljust(63, b'\0')
         elif cmd == 0x0028:                              # MAC_CONTROL: echo
             body = d[12:12 + max(0, size - 8)]
+        elif cmd == 0x0107:                              # EXT SCAN: ack now, results arrive as events (id 0x58)
+            tl = d[12 + 4:12 + max(4, size - 8)]
+            p, chans = 0, []
+            while p + 4 <= len(tl):
+                ttype, tlen = struct.unpack_from('<HH', tl, p)
+                if ttype == 0x0101:
+                    chans = [(tl[p + 4 + k * 6], tl[p + 4 + k * 6 + 1], tl[p + 4 + k * 6 + 2]) for k in range(tlen // 6)]
+                p += 4 + tlen
+            ok = bool(chans) and all(m & 2 for _, _, m in chans)       # the channel filter must be disabled
+            allaps = [(b'HomeNet', '02:11:22:33:44:01', -52, 6, True), (b'CoffeeShop-Guest', '02:11:22:33:44:02', -71, 1, False),
+                      (b'Neighbour5G', '02:11:22:33:44:03', -80, 149, True), (b'', '02:11:22:33:44:04', -85, 11, True)]
+
+            def mk(ssid, mac, rssi, ch, sec):
+                ies = bytes([0, len(ssid)]) + ssid + bytes([3, 1, ch]) + (bytes([48, 4, 1, 0, 0, 0]) if sec else b'')
+                frame = struct.pack('<QHH', 123456789, 100, 0x0411 if sec else 0x0401) + ies
+                bssid = bytes.fromhex(mac.replace(':', ''))
+                t1 = struct.pack('<HH', 0x0156, 6 + len(frame)) + bssid + frame
+                info = struct.pack('<hhBBB', rssi, 0, 0, 0 if ch < 36 else 1, ch).ljust(18, b'\0')
+                t2 = struct.pack('<HH', 0x0157, len(info)) + info
+                return t1 + t2
+            mine = [a for a in allaps if ((a[3] >= 36) == (chans[0][0] == 1))] if ok else []
+            for i in range(0, max(1, len(mine)), 2):
+                part = mine[i:i + 2]
+                tlvs = b''.join(mk(*a) for a in part)
+                last = i + 2 >= len(mine)
+                hdr = struct.pack('<HBBB3sHB', 0x58, 0, 0, 0 if last else 1, b'\0\0\0', len(tlvs), len(part))
+                extra_events.append(struct.pack('<HH', 4 + len(hdr) + len(tlvs), 3) + hdr + tlvs)
         elif cmd == 0x0006:                              # legacy SCAN: a few invented access points
             aps = [(b'HomeNet', '02:11:22:33:44:01', 52, 6, True), (b'CoffeeShop-Guest', '02:11:22:33:44:02', 71, 1, False),
                    (b'Neighbour5G', '02:11:22:33:44:03', 80, 149, True), (b'', '02:11:22:33:44:04', 85, 11, True)]
@@ -133,8 +162,7 @@ class FakeFirmwareLoader:
                     filt_off = bool(chans) and all(m & 2 for m in chans)
                     break
                 p += 4 + tlen
-            if not filt_off:
-                aps = []
+            aps = []                                     # MODEL (real hana, v1.12): the legacy scan command finds nothing on this firmware
             recs = b''
             for ssid, mac, rssi, ch, sec in aps:
                 ies = bytes([0, len(ssid)]) + ssid + bytes([3, 1, ch]) + (bytes([48, 4, 1, 0, 0, 0]) if sec else b'')
@@ -145,12 +173,16 @@ class FakeFirmwareLoader:
             result = 1
         resp = struct.pack('<HHHHHH', 12 + len(body), 1, cmd | 0x8000, 8 + len(body), seq, result) + body
         self.cmds.append((cmd, result))
-        self.cmd_resp = resp
+        self.queue.append(resp)
+        for ev in extra_events:
+            self.queue.append(ev)
         self.int_status = 0x40
 
     def port_read(self, addr, nbytes):
-        if addr == 0x18000 and self.cmd_resp:
-            r, self.cmd_resp = self.cmd_resp, b''
+        if addr == 0x18000 and self.queue:
+            r = self.queue.pop(0)
+            if self.queue:
+                self.int_status = 0x40                   # the next packet is waiting
             return r.ljust(nbytes, b'\0')[:nbytes]
         return bytes(nbytes)
 
@@ -162,7 +194,8 @@ class FakeFirmwareLoader:
         if r == 0x02:
             return self.mask
         if r in (0xb4, 0xb5):
-            return (len(self.cmd_resp) >> (8 * (r - 0xb4))) & 0xff
+            n = len(self.queue[0]) if self.queue else 0
+            return (n >> (8 * (r - 0xb4))) & 0xff
         if r == 0x50:
             if self.running:
                 return 0x08                              # running firmware never asks for a download
