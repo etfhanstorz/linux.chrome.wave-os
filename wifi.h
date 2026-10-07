@@ -437,6 +437,7 @@ bad:
 // Is a packet waiting on the command port? The status bit (0x03, read-to-clear) is easy to miss, so also look at the
 // packet-length registers 0xb4/0xb5 (v1.15 on hana: no status bit, but a 0x700-byte packet was sitting there).
 static u32 wifi_last_len;
+static u32 w3_why, w3_a, w3_b;           // why a command answer was 'malformed': 1 = bad length (a), 2 = block read failed with error a for length b
 static u8 wifi_dbg[16];                   // first bytes of the last unexpected packet
 static u32 wifi_dbg_n;                  // how many unexpected packets were skipped
 static int cmd_packet_waiting(int st);
@@ -484,8 +485,8 @@ static int wifi_cmd(u32 cmd, const u8 *body, u32 blen, u8 *resp, u32 rmax, u32 *
             u32 rx = ((u32)l1 << 8) | (u32)l0;
             wifi_last_len = rx;
             u32 blocks = (rx + 255) / 256;
-            if (rx <= 4 || blocks * 256 > sizeof wbuf) return -3;
-            if (sdio_read_port(WCMD_PORT, wbuf, blocks)) return -3;
+            if (rx <= 4 || blocks * 256 > sizeof wbuf) { w3_why = 1; w3_a = rx; return -3; }
+            { int re = sdio_read_port(WCMD_PORT, wbuf, blocks); if (re) { w3_why = 2; w3_a = (u32)re; w3_b = rx; return -3; } }
             u32 type = get16(wbuf + 2);
             if (type == 3) { if (wifi_event_hook) wifi_event_hook(wbuf + 4, get16(wbuf) > 4 ? get16(wbuf) - 4 : 0); continue; }   // an event: hand it on, keep waiting
             if (type != 1 || (get16(wbuf + 4) & 0x7fff) != cmd) {      // not the answer to this command: remember what it was, keep waiting
@@ -520,7 +521,11 @@ static int wifi_cmd_err(const char *name, int r, u32 sub_base) {
     if (r > 0) { puts("firmware answered with error "); put_dec((u64)r); putc('\n'); errs("WIFI", 13, 1, "Wi-Fi firmware rejected a command"); }
     else if (r == -1) { puts("send failed\n"); errs("WIFI", 12, 1, "could not send a command to the Wi-Fi firmware"); }
     else if (r == -2) { puts("no answer within 1 s\n"); errs("WIFI", 12, 2, "the Wi-Fi firmware did not answer a command"); }
-    else { puts("malformed answer\n"); errs("WIFI", 12, 3, "the Wi-Fi firmware's answer was not understood"); }
+    else {
+        puts("malformed answer");
+        if (w3_why == 1) { puts(": packet length "); put_dec(w3_a); puts(" is unusable"); }
+        else if (w3_why == 2) { puts(": reading the "); put_dec(w3_b); puts("-byte packet failed, controller error "); put_dec(w3_a); }
+        putc('\n'); errs("WIFI", 12, 3, "the Wi-Fi firmware's answer was not understood"); }
     return 0;
 }
 

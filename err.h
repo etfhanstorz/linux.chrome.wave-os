@@ -6,7 +6,7 @@ struct errent { const char *area; u32 num; u32 sub; const char *what; };   // su
 static struct errent err_seen[24];
 static u32 err_count;
 static u32 status_pos;          // where the status line's value starts in the log
-#define STATUS_WIDTH 96
+#define STATUS_WIDTH 200
 
 // Reserve the status line as the first line of the log; filled in by status_update().
 static void status_reserve(void) {
@@ -23,11 +23,12 @@ static void status_update(void) {
     #define ADD(s) for (const char *q_ = (s); *q_ && n < STATUS_WIDTH; q_++) line[n++] = *q_
     if (!err_count) { ADD("ok, no errors"); }
     for (u32 i = 0; i < err_count; i++) {
-        if (i) ADD(" ");
-        ADD(err_seen[i].area); ADD("-");
+        if (i) ADD(" | ");
+        ADD(err_seen[i].area); ADD(".");                 // where it happened (WIFI, KB, DISP...)
         char d[3] = {(char)('0' + err_seen[i].num / 10 % 10), (char)('0' + err_seen[i].num % 10), 0};
-        ADD(d);
-        if (err_seen[i].sub) { char s[3] = {'.', (char)('0' + err_seen[i].sub % 10), 0}; ADD(s); }
+        ADD(d);                                            // which error
+        if (err_seen[i].sub) { char s[3] = {'.', (char)('0' + err_seen[i].sub % 10), 0}; ADD(s); }   // which cause
+        ADD(": "); ADD(err_seen[i].what);                  // what it says
     }
     #undef ADD
     while (n < STATUS_WIDTH) line[n++] = ' ';
@@ -35,12 +36,12 @@ static void status_update(void) {
 }
 
 static void put_code(const char *area, u32 num, u32 sub) {
-    puts(area); putc('-'); putc('0' + num / 10 % 10); putc('0' + num % 10);
+    puts(area); putc('.'); putc('0' + num / 10 % 10); putc('0' + num % 10);
     if (sub) { putc('.'); putc('0' + sub % 10); }
 }
 
 // Report an error once per boot (repeats of the same code are only counted). sub (1..9) names which of
-// several causes behind a code it was, shown as AREA-NN.sub (e.g. WIFI-09.2); 0 = the code has one cause.
+// several causes behind a code it was, shown as AREA.NN.sub (e.g. WIFI.09.2); 0 = the code has one cause.
 static void errs(const char *area, u32 num, u32 sub, const char *what) {
     for (u32 i = 0; i < err_count; i++)
         if (err_seen[i].num == num && err_seen[i].sub == sub && streq(err_seen[i].area, area)) return;
