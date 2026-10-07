@@ -10,3 +10,5 @@ beacon.kpart
 flash.log
 flash-launch.log
 archdt/arch_Image
+fakehana/*.png
+fakehana/__pycache__/

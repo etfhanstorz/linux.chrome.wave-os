@@ -42,13 +42,15 @@ static void wdt_arm(u32 sec) {
 }
 static void wdt_kick(void) { *(volatile u32 *)(0x10007000UL + 0x08) = 0x1971; }
 
-// Reboot: MT8173 watchdog software reset (as Linux mtk_wdt does), then PSCI SYSTEM_RESET.
+// Reboot. PSCI SYSTEM_RESET first: that is how ChromeOS reboots, and the firmware keeps RAM
+// (and so the ramoops log) alive across it. A raw watchdog reset seems to wipe RAM, so it is
+// only the fallback if the firmware call returns.
 static void reboot(void) {
+    register u64 x0 __asm__("x0") = 0x84000009;
+    __asm__ volatile("smc #0" : "+r"(x0) :: "memory");
     volatile u32 *wdt = (volatile u32 *)0x10007000UL;
     u32 mode = wdt[0];
     wdt[0] = ((mode & 0x00ffffff) & ~(1u << 3)) | 0x22000000;   // reset mode, IRQ off, key
     for (int i = 0; i < 4; i++) { wdt[0x14 / 4] = 0x1209; __asm__ volatile("dsb sy" ::: "memory"); }
-    register u64 x0 __asm__("x0") = 0x84000009;
-    __asm__ volatile("smc #0" : "+r"(x0) :: "memory");
     for (;;) __asm__ volatile("wfe");
 }
