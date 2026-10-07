@@ -41,8 +41,45 @@ entry:
     b       3b
 4:  adr     x0, stack_top
     mov     sp, x0
+    // Install fault handler for the current EL: bad MMIO reads set fault_flag instead of hanging
+    adr     x0, vectors
+    mrs     x1, CurrentEL
+    lsr     x1, x1, #2
+    cmp     x1, #2
+    b.ne    5f
+    msr     vbar_el2, x0
+    b       6f
+5:  msr     vbar_el1, x0
+6:  isb
     mov     x0, x19
     bl      main
 park:
     wfe
     b       park
+
+// Any exception: skip the faulting instruction, set fault_flag, return.
+    .balign 2048
+vectors:
+    .rept 16
+    b       fault_handler
+    .balign 128
+    .endr
+
+fault_handler:
+    stp     x0, x1, [sp, #-16]!
+    mrs     x0, CurrentEL
+    lsr     x0, x0, #2
+    cmp     x0, #2
+    b.eq    1f
+    mrs     x0, elr_el1
+    add     x0, x0, #4
+    msr     elr_el1, x0
+    b       2f
+1:  mrs     x0, elr_el2
+    add     x0, x0, #4
+    msr     elr_el2, x0
+2:  adr     x0, fault_flag
+    mov     w1, #1
+    str     w1, [x0]
+    ldp     x0, x1, [sp], #16
+    eret

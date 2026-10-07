@@ -59,7 +59,8 @@ static void fill(const struct fb *f, u32 rgb) {
 }
 
 #include "console.h"
-#define VERSION "wave-os v0.3"
+#define VERSION "wave-os v0.4"
+#include "probe.h"
 #include "shell.h"
 #ifdef QEMU
 #include "qemu_ramfb.h"
@@ -71,7 +72,13 @@ void main(const u8 *dtb) {
 #ifdef QEMU
     ramfb_init(0x50000000UL, 1366, 768);
 #endif
-    if (!find_fb(dtb, &f)) for (;;) ;         // no framebuffer node: nothing we can show
+    struct fb pf;
+    int have_probe = probe_fb(&pf);           // always probe so the screen can show what it saw
+    const char *src = "device tree";
+    if (!find_fb(dtb, &f)) {
+        if (!have_probe) for (;;) ;           // nothing found anywhere: we cannot draw
+        f = pf; src = "display registers (OVL)";
+    }
     fill(&f, 0x0000FF);                       // blue = framebuffer found
     con_init(&f);
     puts(VERSION "\n\n");
@@ -81,6 +88,13 @@ void main(const u8 *dtb) {
     puts("framebuffer: "); put_hex(f.addr); putc(' '); put_dec(f.w); putc('x'); put_dec(f.h);
     puts(" stride "); put_dec(f.stride); puts(" bpp "); put_dec(f.bpp); putc('\n');
     puts("console: "); put_dec(con_cols); putc('x'); put_dec(con_rows); puts(" chars\n\n");
+    puts("screen found via: "); puts(src); putc('\n');
+    for (int i = 0; i < nlayers; i++) {
+        struct layer *l = &layers[i];
+        puts("ovl"); put_dec(l->ovl); puts(" L"); put_dec(l->n); puts(l->en ? " on  " : " off ");
+        puts("addr "); put_hex(l->addr); puts(" size "); put_hex(l->size); puts(" pitch "); put_dec(l->pitch);
+        puts(" con "); put_hex(l->con); putc('\n');
+    }
     puts("boot ok.\n");
 #ifdef QEMU
     puts("type help (typing goes in the Ubuntu terminal)\n\n");
