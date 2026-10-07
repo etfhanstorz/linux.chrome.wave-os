@@ -181,7 +181,7 @@ class FakeFirmwareLoader:
         self.queue.append(resp)
         for ev in extra_events:
             self.queue.append(ev)
-        self.int_status = 0x40
+        self.int_status = 0xc0                           # 0x40 packet waiting + 0x80 command port ready again
 
     def port_read(self, addr, nbytes):
         if addr == 0x18000 and self.queue:
@@ -195,9 +195,8 @@ class FakeFirmwareLoader:
         if r == 0x03:
             self.acked = True                            # reading the status register acknowledges the boot interrupt
             v, self.int_status = (self.int_status or 0x01), 0    # reset on read
-            if v == 0x40:
-                return 0                                 # MODEL (real hana, v1.15): the packet-ready bit is not reliably seen; only the length register shows it
-            return v if self.mask & 0x40 or v == 0x01 else 0
+            v &= ~0x40                                   # MODEL (real hana, v1.15): the packet-ready bit is not reliably seen; only the length register shows it
+            return v if (self.mask & 0x40 or v == 0x01) else 0
         if r == 0x02:
             return self.mask
         if r in (0xb4, 0xb5):

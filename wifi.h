@@ -445,7 +445,9 @@ static u16 wifi_seq;
 static void (*wifi_event_hook)(const u8 *ev, u32 len);   // called for firmware events seen while waiting
 static u32 wifi_cmd_ms = 1000;          // how long to wait for an answer (scans need longer)
 
+static int wifi_dn_seen;                  // the chip raised 'command port ready' (0x80) since our last command
 static int cmd_packet_waiting(int st) {
+    if (st >= 0 && (st & 0x80)) wifi_dn_seen = 1;
     if (st >= 0 && (st & UP_LD_CMD_PORT_INT)) return 1;
     int l0 = fn1_rd(0xb4), l1 = fn1_rd(0xb5);
     if (l0 < 0 || l1 < 0) return 0;
@@ -467,7 +469,11 @@ static int wifi_cmd(u32 cmd, const u8 *body, u32 blen, u8 *resp, u32 rmax, u32 *
     put16(wbuf, total); put16(wbuf + 2, 1);                       // SDIO header: length, type = command
     put16(wbuf + 4, cmd); put16(wbuf + 6, 8 + blen); put16(wbuf + 8, ++wifi_seq); put16(wbuf + 10, 0);
     for (u32 i = 0; i < blen; i++) wbuf[12 + i] = body[i];
+    // Linux sends the next command only after the chip raised 'command port ready' (0x80) for the last one.
+    for (u32 i = 0; i < 100 && wifi_seq > 1 && !wifi_dn_seen; i++) { int s = fn1_rd(0x03); if (s >= 0 && (s & 0x80)) wifi_dn_seen = 1; if (s >= 0 && (s & 0x40)) break; delay_us(500); }
+    delay_us(5000);
     fn1_rd(0x03);                                                  // clear stale interrupt bits (reset on read)
+    wifi_dn_seen = 0;
     if (sdio_write_port(WCMD_PORT, wbuf, (total + 255) / 256)) return -1;
     u64 hz = tick_hz(), t0 = ticks();
     for (;;) {
