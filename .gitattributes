@@ -1,0 +1,4 @@
+* text=auto eol=lf
+*.kpart binary
+*.dtb binary
+*.png binary
