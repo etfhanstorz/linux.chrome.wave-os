@@ -58,8 +58,9 @@ static void fill(const struct fb *f, u32 rgb) {
     }
 }
 
+#include "rlog.h"
 #include "console.h"
-#define VERSION "wave-os v0.5"
+#define VERSION "wave-os v0.6"
 #include "sys.h"
 #include "probe.h"
 #include "shell.h"
@@ -67,52 +68,100 @@ static void fill(const struct fb *f, u32 rgb) {
 #include "qemu_ramfb.h"
 #endif
 
+// Print registers base+off for each offset, 3 per line. Reads are fault-safe (rd32).
+static void dump(const char *name, u64 base, const u32 *offs, int n) {
+    puts(name); puts(" @"); put_hex(base); putc('\n');
+    for (int i = 0; i < n; i++) {
+        puts("  +"); put_hex(offs[i]); puts("="); put_hex(rd32(base + offs[i]));
+        if (i % 3 == 2 || i == n - 1) putc('\n');
+    }
+}
 
 void main(const u8 *dtb) {
-    struct fb f;
     icache_on();
-#ifdef QEMU
+#ifndef QEMU
+    wdt_arm(30);                              // dead-man switch: any freeze -> reboot in 30 s
+#else
     ramfb_init(0x50000000UL, 1366, 768);
 #endif
-    struct fb pf;
-    int have_probe = probe_fb(&pf);           // always probe so the screen can show what it saw
-    const char *src = "device tree";
-    if (!find_fb(dtb, &f)) {
-        if (!have_probe) {
-#ifndef QEMU
-            reboot();                         // signal: no screen found anywhere -> immediate reboot
-#endif
-            for (;;) ;
-        }
-        f = pf; src = "display registers (OVL)";
+    dt_scan(dtb);
+    int have_log = rlog_init();
+
+    puts(VERSION " diagnostic log\n");
+    puts("EL"); put_dec(current_el()); puts("  dtb "); put_hex((u64)dtb); puts(" size "); put_dec(be32(dtb + 4));
+    puts(" nodes "); put_dec(dti.nodes); puts("  cntfrq "); put_dec(tick_hz()); putc('\n');
+    puts("model: "); puts(dti.model ? dti.model : "(none)"); putc('\n');
+    puts("bootargs: "); puts(dti.bootargs ? dti.bootargs : "(none)"); putc('\n');
+    puts("ramoops: "); puts(have_log ? "zone " : "not found "); put_hex(rlog_zone); puts(" size "); put_hex(rlog_zone_size);
+    puts(" rec "); put_hex(dti.rec_size); puts(" con "); put_hex(dti.con_size); puts(" ftrace "); put_hex(dti.ftrace_size);
+    puts(" pmsg "); put_hex(dti.pmsg_size); puts(" ecc "); put_dec(dti.ecc_size); putc('\n');
+
+    // Firmware's coreboot table (may record the framebuffer the firmware drew on)
+    struct cbfb cb; u64 cbt = 0;
+    cb.addr = 0; cb.w = cb.h = cb.pitch = 0; cb.bpp = 0;
+    int have_cb = cb_find_fb(&cb, &cbt);
+    puts("coreboot node: "); puts(dti.cb_reg ? "yes" : "no"); puts("  table "); put_hex(cbt);
+    puts("  framebuffer record: "); puts(have_cb ? "yes" : "no"); putc('\n');
+    if (have_cb) {
+        puts("  cb fb "); put_hex(cb.addr); putc(' '); put_dec(cb.w); putc('x'); put_dec(cb.h);
+        puts(" pitch "); put_dec(cb.pitch); puts(" bpp "); put_dec(cb.bpp);
+        puts(" r"); put_dec(cb.rpos); putc('/'); put_dec(cb.rsz); puts(" g"); put_dec(cb.gpos); putc('/'); put_dec(cb.gsz);
+        puts(" b"); put_dec(cb.bpos); putc('/'); put_dec(cb.bsz); putc('\n');
     }
-    fill(&f, 0xFFFFFF);                       // white = framebuffer found (most visible)
-#ifndef QEMU
-    delay_s(2);
-#endif
-    con_init(&f);
-    puts(VERSION "\n\n");
-    u64 el; __asm__ volatile("mrs %0, CurrentEL" : "=r"(el));
-    puts("exception level: EL"); put_dec(el >> 2); putc('\n');
-    puts("dtb at: "); put_hex((u64)dtb); puts(", size "); put_dec(be32(dtb + 4)); putc('\n');
-    puts("framebuffer: "); put_hex(f.addr); putc(' '); put_dec(f.w); putc('x'); put_dec(f.h);
-    puts(" stride "); put_dec(f.stride); puts(" bpp "); put_dec(f.bpp); putc('\n');
-    puts("console: "); put_dec(con_cols); putc('x'); put_dec(con_rows); puts(" chars\n\n");
-    puts("screen found via: "); puts(src); putc('\n');
+
+    // Display controller (these reads worked in v0.5)
+    static const u32 ovl_regs[] = {0x0c, 0x20, 0x2c};
+    dump("ovl0", 0x1400c000UL, ovl_regs, 3);
+    dump("ovl1", 0x1400d000UL, ovl_regs, 3);
+    struct fb pf;
+    int have_probe = probe_fb(&pf);
     for (int i = 0; i < nlayers; i++) {
         struct layer *l = &layers[i];
-        puts("ovl"); put_dec(l->ovl); puts(" L"); put_dec(l->n); puts(l->en ? " on  " : " off ");
+        puts("  ovl"); put_dec(l->ovl); puts(" L"); put_dec(l->n); puts(l->en ? " on  " : " off ");
         puts("addr "); put_hex(l->addr); puts(" size "); put_hex(l->size); puts(" pitch "); put_dec(l->pitch);
         puts(" con "); put_hex(l->con); putc('\n');
     }
-    puts("boot ok.\n");
-#ifdef QEMU
-    puts("type help (typing goes in the Ubuntu terminal)\n\n");
-#else
-    puts("keyboard: no driver for this hardware yet\n");
-    puts("diagnostic build: rebooting in 20 seconds (take a photo!)\n");
-    delay_s(20);
+
+    // Pick a screen: device tree, then coreboot table, then display registers
+    struct fb f; const char *src = 0;
+    if (find_fb(dtb, &f)) src = "device tree";
+    else if (have_cb && cb.w && cb.h && in_ram(cb.addr, (u64)cb.pitch * cb.h)) {
+        f.addr = cb.addr; f.w = cb.w; f.h = cb.h; f.stride = cb.pitch; f.bpp = cb.bpp == 16 ? 16 : 32;
+        src = "coreboot table";
+    } else if (have_probe) { f = pf; src = "OVL registers"; }
+
+    if (src) {
+        puts("screen: "); puts(src); puts(" -> "); put_hex(f.addr); putc(' '); put_dec(f.w); putc('x'); put_dec(f.h);
+        puts(" stride "); put_dec(f.stride); puts(" bpp "); put_dec(f.bpp); putc('\n');
+        fill(&f, 0xFFFFFF);                   // white first: most visible
+        con_init(&f);                         // from here, text also goes to the screen
+        puts(VERSION "\nscreen from "); puts(src); putc('\n');
+    } else {
+        puts("screen: none found\n");
+    }
+
+    // Riskier reads last: blocks that may be powered off (a freeze here only cuts the log short)
+    static const u32 mmsys_regs[] = {0x100, 0x110};
+    static const u32 rdma_regs[] = {0x10, 0x14, 0x18, 0x24, 0x2c, 0xf00};
+    static const u32 dsi_regs[] = {0x00, 0x04, 0x14, 0x18};
+    static const u32 pwm_regs[] = {0x00, 0x08, 0x10, 0x14};
+    static const u32 gpio_regs[] = {0x020, 0x420, 0x520, 0x050, 0x450, 0x550};   // dir/dout/din for pins 32-47, 80-95
+    dump("mmsys", 0x14000000UL, mmsys_regs, 2);
+    dump("rdma0", 0x1400e000UL, rdma_regs, 6);
+    dump("rdma1", 0x1400f000UL, rdma_regs, 6);
+    dump("gpio", 0x10005000UL, gpio_regs, 6);
+    dump("disp_pwm0", 0x1401e000UL, pwm_regs, 4);
+    dump("dsi0", 0x1401b000UL, dsi_regs, 4);
+    puts("log end ok\n");
+    (void)have_log;
+
+#ifndef QEMU
+    puts("rebooting in 15 s. Then: Ctrl+D, and read /sys/fs/pstore/console-ramoops-0\n");
+    wdt_kick();
+    delay_s(15);
     reboot();
+#else
+    puts("type help (typing goes in the Ubuntu terminal)\n\n");
 #endif
     shell();
 }

@@ -37,10 +37,13 @@ static void con_scroll(void) {
     for (u32 y = (con_rows - 1) * CH; y < con_rows * CH; y++) for (u32 x = 0; x < con_cols * CW; x++) px(x, y, con_bg);
     con_row = con_rows - 1;
 }
+static int con_on;   // screen drawing enabled (text always goes to the log)
 static void con_init(const struct fb *f) {
-    con_fb = *f; con_cols = f->w / CW; con_rows = f->h / CH; con_clear();
+    con_fb = *f; con_cols = f->w / CW; con_rows = f->h / CH; con_clear(); con_on = 1;
 }
 static void putc(char c) {
+    logc(c);
+    if (!con_on) return;
     if (c == '\n') { con_col = 0; con_row++; }
     else if (c == '\b') { if (con_col) { con_col--; glyph(con_col, con_row, ' '); } }
     else { glyph(con_col, con_row, c); if (++con_col >= con_cols) { con_col = 0; con_row++; } }

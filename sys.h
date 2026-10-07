@@ -29,6 +29,19 @@ static void delay_s(u32 s) {
     }
 }
 
+// Dead-man switch: arm the MT8173 watchdog so that if we freeze, the machine reboots after `sec`
+// seconds (max 31). Same register sequence as Linux mtk_wdt set_timeout + start.
+static void wdt_arm(u32 sec) {
+    volatile u32 *wdt = (volatile u32 *)0x10007000UL;
+    if (sec > 31) sec = 31;
+    wdt[0x04 / 4] = ((sec << 6) << 5) | 0x8;                     // WDT_LENGTH: timeout | key
+    wdt[0x08 / 4] = 0x1971;                                      // WDT_RST: reload counter
+    u32 mode = wdt[0];
+    mode &= 0x00ffffff & ~((1u << 3) | (1u << 6));               // no IRQ / dual mode: real reset
+    wdt[0] = mode | 1 | 0x22000000;                              // WDT_MODE_EN | key
+}
+static void wdt_kick(void) { *(volatile u32 *)(0x10007000UL + 0x08) = 0x1971; }
+
 // Reboot: MT8173 watchdog software reset (as Linux mtk_wdt does), then PSCI SYSTEM_RESET.
 static void reboot(void) {
     volatile u32 *wdt = (volatile u32 *)0x10007000UL;
