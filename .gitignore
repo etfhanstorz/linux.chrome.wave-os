@@ -1,0 +1,7 @@
+*.o
+*.elf
+Image
+image.itb
+bootloader.bin
+out.kpart
+preview.png
