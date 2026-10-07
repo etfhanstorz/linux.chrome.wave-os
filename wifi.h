@@ -454,6 +454,7 @@ bad:
 // Is a packet waiting on the command port? The status bit (0x03, read-to-clear) is easy to miss, so also look at the
 // packet-length registers 0xb4/0xb5 (v1.15 on hana: no status bit, but a 0x700-byte packet was sitting there).
 static u32 wifi_last_len;
+static u32 scan_done, scan_events;        // set by the scan event handler (defined further down)
 static u32 w1_err, w1_tries;              // last failed command write: controller error, attempts made
 static u32 w3_why, w3_a, w3_b;           // why a command answer was 'malformed': 1 = bad length (a), 2 = block read failed with error a for length b
 static u8 wifi_dbg[16];                   // first bytes of the last unexpected packet
@@ -527,7 +528,11 @@ static int wifi_cmd(u32 cmd, const u8 *body, u32 blen, u8 *resp, u32 rmax, u32 *
             { int re = sdio_read_port(WCMD_PORT, wbuf, blocks); if (re) { w3_why = 2; w3_a = (u32)re; w3_b = rx; return -3; } }
             after_packet_read(rx);
             u32 type = get16(wbuf + 2);
-            if (type == 3) { if (wifi_event_hook) wifi_event_hook(wbuf + 4, get16(wbuf) > 4 ? get16(wbuf) - 4 : 0); continue; }   // an event: hand it on, keep waiting
+            if (type == 3) {                                       // an event: hand it on, keep waiting
+                if (wifi_event_hook) wifi_event_hook(wbuf + 4, get16(wbuf) > 4 ? get16(wbuf) - 4 : 0);
+                if (cmd == 0x0107 && scan_done) { if (rlen) *rlen = 0; return 0; }   // the last scan report arrived: the scan is complete (the chip may send no separate reply)
+                continue;
+            }
             if (type != 1 || (get16(wbuf + 4) & 0x7fff) != cmd) {      // not the answer to this command: remember what it was, keep waiting
                 for (u32 i = 0; i < 16; i++) wifi_dbg[i] = wbuf[i];
                 wifi_dbg_n++;
@@ -539,6 +544,7 @@ static int wifi_cmd(u32 cmd, const u8 *body, u32 blen, u8 *resp, u32 rmax, u32 *
             for (u32 i = 0; i < body_len && i < rmax; i++) resp[i] = wbuf[12 + i];
             return (int)get16(wbuf + 10);
         }
+        if (cmd == 0x0107 && scan_events && hz && ticks() - t0 > hz * 2) { if (rlen) *rlen = 0; return 0; }   // events came in but the 'last report' flag was missed: good enough after 2 s
         if (hz && ticks() - t0 > hz / 1000 * wifi_cmd_ms) {        // normally 1 s
             {   // a packet may still be waiting: read it anyway and show how it begins
                 int q0 = fn1_rd(0xb4), q1 = fn1_rd(0xb5);

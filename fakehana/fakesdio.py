@@ -178,6 +178,10 @@ class FakeFirmwareLoader:
             return
         resp = struct.pack('<HHHHHH', 12 + len(body), 1, cmd | 0x8000, 8 + len(body), seq, result) + body
         self.cmds.append((cmd, result))
+        if cmd == 0x0107:                                # MODEL (real hana): an extended scan gets its results as events, no separate reply
+            self.queue.extend(extra_events)
+            self.int_status = 0xc0
+            return
         self.queue.append(resp)
         for ev in extra_events:
             self.queue.append(ev)
