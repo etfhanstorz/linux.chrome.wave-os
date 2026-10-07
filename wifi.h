@@ -505,7 +505,8 @@ bad:
 // Is a packet waiting on the command port? The status bit (0x03, read-to-clear) is easy to miss, so also look at the
 // packet-length registers 0xb4/0xb5 (v1.15 on hana: no status bit, but a 0x700-byte packet was sitting there).
 static u32 wifi_last_len;
-static u32 scan_done, scan_events;        // set by the scan event handler (defined further down)
+static u32 scan_done, scan_events;
+static u8 raw_rec[40]; static u32 raw_len, raw_taken;   // raw bytes of the first scan record (diagnostics)        // set by the scan event handler (defined further down)
 static u32 w1_err, w1_tries;              // last failed command write: controller error, attempts made
 static u32 w3_why, w3_a, w3_b;           // why a command answer was 'malformed': 1 = bad length (a), 2 = block read failed with error a for length b
 static u8 wifi_dbg[16];                   // first bytes of the last unexpected packet
@@ -703,6 +704,7 @@ static void scan_event(const u8 *ev, u32 len) {
         u32 type = get16(t), tl = get16(t + 2);
         if (left < 4 + tl) break;
         if (type == 0x0156 && tl >= 6 + 12) {                      // BSS_SCAN_RSP: bssid[6] + frame body (ts8, interval2, cap2, IEs)
+            if (!raw_taken) { raw_taken = 1; raw_len = tl; for (u32 q = 0; q < 40 && q < tl + 4; q++) raw_rec[q] = t[q]; }
             u32 k;
             for (k = 0; k < nap; k++) { u32 same = 1; for (u32 m = 0; m < 6; m++) if (aps[k].bssid[m] != t[4 + m]) same = 0; if (same) break; }
             if (k == nap && nap < 32) nap++;
@@ -781,7 +783,7 @@ static int wifi_scan(int with5) {
     if (rc > 0) puts("  (MAC_CONTROL rejected; continuing)\n");
     static const u8 ch24[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
     static const u8 ch5[] = {36, 40, 44, 48, 149, 153, 157, 161, 165};
-    nap = 0; scan_events = 0; scan_bytes = 0; dbg_taken = 0;
+    nap = 0; scan_events = 0; scan_bytes = 0; dbg_taken = 0; raw_taken = 0;
     wifi_event_hook = scan_event;
     puts("scanning 2.4 GHz...\n");
     int ok = scan_band(0, ch24, sizeof ch24);
@@ -794,6 +796,7 @@ static int wifi_scan(int with5) {
     }
     wifi_event_hook = 0;
     if (!scan_events && !nap) return 0;                              // nothing at all: the error above says why
+    if (raw_taken) { puts("first record: block length "); put_dec(raw_len); puts(", bytes:"); for (u32 q = 0; q < 40; q++) { puts(" "); putc("0123456789abcdef"[raw_rec[q] >> 4]); putc("0123456789abcdef"[raw_rec[q] & 15]); } putc('\n'); }
     if (dbg_taken) { puts("first big packet, block starts:"); for (u32 b = 0; b < dbg_blocks; b++) { putc(' '); put_hex(dbg_starts[b]); } putc('\n'); }
     puts("scan events received: "); put_dec(scan_events); puts(" ("); put_dec(scan_bytes); puts(" bytes)\n");
     if (!scan_events) errs("WIFI", 14, 3, "the scan finished but the firmware sent no scan results");
