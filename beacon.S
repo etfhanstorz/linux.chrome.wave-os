@@ -8,7 +8,7 @@ _start:
     .long   0                   // code1
     .quad   0x80000             // text_offset
     .quad   image_size          // image_size
-    .quad   0xa                 // flags
+    .quad   0                   // flags: 0, same as the Arch kernel that boots on this firmware
     .quad   0
     .quad   0
     .quad   0
@@ -27,7 +27,7 @@ entry:
     cbz     x2, check           // no timer frequency set: skip the wait
     lsl     x2, x2, #2          // 4 s worth of ticks
     mrs     x4, cntpct_el0
-    mov     x6, #0x7fffffff     // iteration cap
+    mov     x6, #0x10000000     // iteration cap (in case the counter is stopped)
 1:  mrs     x5, cntpct_el0
     sub     x5, x5, x4
     cmp     x5, x2

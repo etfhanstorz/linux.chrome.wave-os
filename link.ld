@@ -12,6 +12,7 @@ SECTIONS {
   . += 0x10000;
   stack_top = .;
   __bss_end = .;
+  . = ALIGN(0x10000);
   _kend = .;
   image_size = _kend - _kstart;
 }

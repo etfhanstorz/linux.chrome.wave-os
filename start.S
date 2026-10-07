@@ -6,7 +6,7 @@ _start:
     .long   0                   // code1
     .quad   0x80000             // text_offset
     .quad   image_size          // image_size (from linker script)
-    .quad   0xa                 // flags: LE, 4K pages, place anywhere
+    .quad   0                   // flags: 0, same as the Arch kernel that boots on this firmware
     .quad   0
     .quad   0
     .quad   0
