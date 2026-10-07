@@ -453,13 +453,20 @@ static void (*wifi_event_hook)(const u8 *ev, u32 len);   // called for firmware 
 static u32 wifi_cmd_ms = 1000;          // how long to wait for an answer (scans need longer)
 
 static int wifi_dn_seen;                  // the chip raised 'command port ready' (0x80) since our last command
-static int cmd_packet_waiting(int st) {
+static int wifi_len_sticky;              // 1 = the chip does NOT clear the length register after we read a packet
+static void after_packet_read(u32 rx) {
+    int l0 = fn1_rd(0xb4), l1 = fn1_rd(0xb5);
+    u32 now = (l0 < 0 || l1 < 0) ? rx : (((u32)l1 << 8) | (u32)l0);
+    if (now == 0) { wifi_len_sticky = 0; wifi_last_len = 0; }       // cleared: any non-zero length is a new packet
+    else { wifi_len_sticky = 1; wifi_last_len = rx; }               // still set: compare against what we read
+}static int cmd_packet_waiting(int st) {
     if (st >= 0 && (st & 0x80)) wifi_dn_seen = 1;
     if (st >= 0 && (st & UP_LD_CMD_PORT_INT)) return 1;
     int l0 = fn1_rd(0xb4), l1 = fn1_rd(0xb5);
     if (l0 < 0 || l1 < 0) return 0;
     u32 len = ((u32)l1 << 8) | (u32)l0;
     if (!len) { wifi_last_len = 0; return 0; }
+    if (!wifi_len_sticky) return 1;                                // cleared-after-read chip: non-zero means a new packet
     return len != wifi_last_len;                                   // a length we have not read yet
 }
 static void put16(u8 *p, u32 v) { p[0] = v; p[1] = v >> 8; }
@@ -505,6 +512,7 @@ static int wifi_cmd(u32 cmd, const u8 *body, u32 blen, u8 *resp, u32 rmax, u32 *
             u32 blocks = (rx + 255) / 256;
             if (rx <= 4 || blocks * 256 > sizeof wbuf) { w3_why = 1; w3_a = rx; return -3; }
             { int re = sdio_read_port(WCMD_PORT, wbuf, blocks); if (re) { w3_why = 2; w3_a = (u32)re; w3_b = rx; return -3; } }
+            after_packet_read(rx);
             u32 type = get16(wbuf + 2);
             if (type == 3) { if (wifi_event_hook) wifi_event_hook(wbuf + 4, get16(wbuf) > 4 ? get16(wbuf) - 4 : 0); continue; }   // an event: hand it on, keep waiting
             if (type != 1 || (get16(wbuf + 4) & 0x7fff) != cmd) {      // not the answer to this command: remember what it was, keep waiting
@@ -519,7 +527,15 @@ static int wifi_cmd(u32 cmd, const u8 *body, u32 blen, u8 *resp, u32 rmax, u32 *
             return (int)get16(wbuf + 10);
         }
         if (hz && ticks() - t0 > hz / 1000 * wifi_cmd_ms) {        // normally 1 s
-            if (wifi_dbg_n) { puts("  skipped "); put_dec(wifi_dbg_n); puts(" unexpected packet(s); the last began:"); for (u32 i = 0; i < 16; i++) { putc(' '); put_hex(wifi_dbg[i]); } putc('\n'); }
+            {   // a packet may still be waiting: read it anyway and show how it begins
+                int q0 = fn1_rd(0xb4), q1 = fn1_rd(0xb5);
+                u32 qlen = (q0 < 0 || q1 < 0) ? 0 : (((u32)q1 << 8) | (u32)q0), qb = (qlen + 255) / 256;
+                if (qlen > 4 && qb * 256 <= sizeof wbuf && !sdio_read_port(WCMD_PORT, wbuf, qb)) {
+                    puts("  waiting packet ("); put_dec(qlen); puts(" bytes) began:");
+                    for (u32 i = 0; i < 16; i++) { putc(' '); put_hex(wbuf[i]); }
+                    putc('\n');
+                }
+            }            if (wifi_dbg_n) { puts("  skipped "); put_dec(wifi_dbg_n); puts(" unexpected packet(s); the last began:"); for (u32 i = 0; i < 16; i++) { putc(' '); put_hex(wifi_dbg[i]); } putc('\n'); }
             puts("  no answer. status 0x03 = "); put_hex((u32)st); puts(", mask 0x02 = "); put_hex((u32)fn1_rd(0x02));
             puts(", 0x50 = "); put_hex((u32)fn1_rd(0x50)); puts(", cmd length 0xb4/5 = "); put_hex((u32)fn1_rd(0xb4)); puts("/"); put_hex((u32)fn1_rd(0xb5)); putc('\n');
             return -2;
@@ -653,8 +669,7 @@ static void wifi_poll_events(u32 ms) {
         if (cmd_packet_waiting(st)) {
             int l0 = fn1_rd(0xb4), l1 = fn1_rd(0xb5);
             u32 rx = ((u32)(l1 < 0 ? 0 : l1) << 8) | (u32)(l0 < 0 ? 0 : l0), blocks = (rx + 255) / 256;
-            wifi_last_len = rx;
-            if (rx > 4 && blocks * 256 <= sizeof wbuf && !sdio_read_port(WCMD_PORT, wbuf, blocks) && get16(wbuf + 2) == 3 && wifi_event_hook)
+            if (rx > 4 && blocks * 256 <= sizeof wbuf && !sdio_read_port(WCMD_PORT, wbuf, blocks) && (after_packet_read(rx), 1) && get16(wbuf + 2) == 3 && wifi_event_hook)
                 wifi_event_hook(wbuf + 4, get16(wbuf) > 4 ? get16(wbuf) - 4 : 0);
         } else delay_us(500);
     }
