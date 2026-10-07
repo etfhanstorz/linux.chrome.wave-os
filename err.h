@@ -2,11 +2,11 @@
 // Each code is shown in yellow on screen, written to the log, and summarised in a status line
 // kept at the very top of the log, so `head -3` of console-ramoops-0 tells the story.
 
-struct errent { const char *area; u32 num; const char *what; };
+struct errent { const char *area; u32 num; u32 sub; const char *what; };   // sub 0 = none, else the .N cause
 static struct errent err_seen[24];
 static u32 err_count;
 static u32 status_pos;          // where the status line's value starts in the log
-#define STATUS_WIDTH 72
+#define STATUS_WIDTH 96
 
 // Reserve the status line as the first line of the log; filled in by status_update().
 static void status_reserve(void) {
@@ -27,35 +27,39 @@ static void status_update(void) {
         ADD(err_seen[i].area); ADD("-");
         char d[3] = {(char)('0' + err_seen[i].num / 10 % 10), (char)('0' + err_seen[i].num % 10), 0};
         ADD(d);
+        if (err_seen[i].sub) { char s[3] = {'.', (char)('0' + err_seen[i].sub % 10), 0}; ADD(s); }
     }
     #undef ADD
     while (n < STATUS_WIDTH) line[n++] = ' ';
     for (u32 i = 0; i < STATUS_WIDTH; i++) rlog_data[status_pos + i] = line[i];
 }
 
-static void put_code(const char *area, u32 num) {
+static void put_code(const char *area, u32 num, u32 sub) {
     puts(area); putc('-'); putc('0' + num / 10 % 10); putc('0' + num % 10);
+    if (sub) { putc('.'); putc('0' + sub % 10); }
 }
 
-// Report an error once per boot (repeats of the same code are only counted).
-static void err(const char *area, u32 num, const char *what) {
+// Report an error once per boot (repeats of the same code are only counted). sub (1..9) names which of
+// several causes behind a code it was, shown as AREA-NN.sub (e.g. WIFI-09.2); 0 = the code has one cause.
+static void errs(const char *area, u32 num, u32 sub, const char *what) {
     for (u32 i = 0; i < err_count; i++)
-        if (err_seen[i].num == num && streq(err_seen[i].area, area)) return;
+        if (err_seen[i].num == num && err_seen[i].sub == sub && streq(err_seen[i].area, area)) return;
     if (err_count < sizeof err_seen / sizeof err_seen[0]) {
-        err_seen[err_count].area = area; err_seen[err_count].num = num; err_seen[err_count].what = what;
+        err_seen[err_count].area = area; err_seen[err_count].num = num; err_seen[err_count].sub = sub; err_seen[err_count].what = what;
         err_count++;
     }
     u32 fg = con_fg;
     con_fg = 0xFFE040;
-    puts("error "); put_code(area, num); puts(": "); puts(what); putc('\n');
+    puts("error "); put_code(area, num, sub); puts(": "); puts(what); putc('\n');
     con_fg = fg;
     status_update();
 }
 
+#define err(area, num, what) errs(area, num, 0, what)
 static void list_errors(void) {
     if (!err_count) { puts("no errors this boot\n"); return; }
     for (u32 i = 0; i < err_count; i++) {
-        put_code(err_seen[i].area, err_seen[i].num); puts("  "); puts(err_seen[i].what); putc('\n');
+        put_code(err_seen[i].area, err_seen[i].num, err_seen[i].sub); puts("  "); puts(err_seen[i].what); putc('\n');
     }
 }
 

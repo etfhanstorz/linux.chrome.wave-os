@@ -75,7 +75,14 @@ class FakeFirmwareLoader:
         self.i = 0
         self.last = None
         self.stats = dict(writes=0, bytes=0, bad=0)
-        self.cfg = {0xcd: 0, 0xb8: 0, 0xb9: 0}
+        self.cfg = {0xcd: 0, 0xb8: 0, 0xb9: 0, 0x01: 0, 0xcc: 0}
+        self.acked = False              # MODEL: the ROM signals "download ready" only after the host
+                                        # acknowledged its boot interrupt (read 0x03), set reset-on-read
+                                        # (0x01) and auto re-enable (0xcc bit 4), as Linux mwifiex does.
+                                        # (v1.5 skipped these on the real hana: WIFI-09, chip stopped asking.)
+
+    def ready(self):
+        return self.acked and (self.cfg[0x01] & 0xff) == 0xff and (self.cfg[0xcc] & 0x10)
 
     def want(self):
         if self.pos >= len(self.fw):
@@ -84,8 +91,11 @@ class FakeFirmwareLoader:
         return min(n, len(self.fw) - self.pos)
 
     def reg(self, r):
+        if r == 0x03:
+            self.acked = True                            # reading the status register acknowledges the boot interrupt
+            return 0x01
         if r == 0x50:
-            return 0x09                                  # card io ready | download ready
+            return 0x09 if self.ready() else 0x08        # card io ready (+ download ready)
         if r in (0x60, 0x61):
             n = self.want() + (self.want() & 1)          # ROM reports even lengths
             n = self.want()

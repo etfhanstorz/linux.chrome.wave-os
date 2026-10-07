@@ -201,17 +201,17 @@ static int wifi_on(void) {
         delay_us(10000);
     }
     u32 r6 = 0, r1 = 0;
-    if (msdc_cmd(3, 0, RSP_R1, &r6)) { err("WIFI", 5, "chip did not give an address (CMD3)"); return 0; }
+    if (msdc_cmd(3, 0, RSP_R1, &r6)) { errs("WIFI", 5, 1, "chip did not give an address (CMD3)"); return 0; }
     u32 rca = r6 >> 16;
-    if (msdc_cmd(7, rca << 16, RSP_R1B, &r1)) { err("WIFI", 5, "chip could not be selected (CMD7)"); return 0; }
+    if (msdc_cmd(7, rca << 16, RSP_R1B, &r1)) { errs("WIFI", 5, 2, "chip could not be selected (CMD7)"); return 0; }
     puts("  ready, address "); put_hex(rca); putc('\n');
     // 5. Card ID from the common CIS. Marvell numbers each chip as card / Wi-Fi / Bluetooth:
     //    8897 = 0x912c / 0x912d / 0x912e (Linux sdio_ids.h lists 0x912d, 0x912e; 8797 is 0x9128/9/a).
     int cccr = sdio_read_byte(0, 0x00), sdrev = sdio_read_byte(0, 0x01);
-    if (cccr < 0 || sdrev < 0) { err("WIFI", 6, "SDIO register read (CMD52) failed"); return 0; }
+    if (cccr < 0 || sdrev < 0) { errs("WIFI", 6, 1, "SDIO register read (CMD52) failed"); return 0; }
     u32 cis = cis_ptr(0x000), vendor = 0, device = 0;
     puts("  CCCR rev "); put_hex(cccr); puts(", SD rev "); put_hex(sdrev); puts(", CIS at "); put_hex(cis); putc('\n');
-    if (sdio_manfid(cis, &vendor, &device)) { err("WIFI", 6, "SDIO register read (CMD52) failed"); return 0; }
+    if (sdio_manfid(cis, &vendor, &device)) { errs("WIFI", 6, 2, "SDIO register read (CMD52) failed"); return 0; }
     puts("  card: vendor "); put_hex(vendor); puts(", device "); put_hex(device);
     if (vendor != 0x02df || (device != 0x912c && device != 0x912d)) {
         puts("\n"); err("WIFI", 7, "unexpected SDIO vendor/device ID (not a Marvell 88W8897)"); return 0;
@@ -224,7 +224,7 @@ static int wifi_on(void) {
         puts(fd == 0x912d ? " (Wi-Fi)\n" : " (?)\n");
     }
     int ioe = sdio_read_byte(0, 0x02);
-    if (ioe < 0 || sdio_write_byte(0, 0x02, (u32)ioe | 2)) { err("WIFI", 6, "SDIO register read (CMD52) failed"); return 0; }
+    if (ioe < 0 || sdio_write_byte(0, 0x02, (u32)ioe | 2)) { errs("WIFI", 6, 3, "SDIO register read (CMD52) failed"); return 0; }
     int ready = 0;
     t0 = ticks();
     while (!ready) {
@@ -235,7 +235,7 @@ static int wifi_on(void) {
     }
     if (!ready) { err("WIFI", 8, "Wi-Fi function 1 did not become ready after enabling"); return 0; }
     if (sdio_write_byte(0, 0x110, 0x00) || sdio_write_byte(0, 0x111, 0x01)) {   // FBR1 block size = 256
-        err("WIFI", 6, "SDIO register read (CMD52) failed"); return 0;
+        errs("WIFI", 6, 4, "SDIO register read (CMD52) failed"); return 0;
     }
     int bs = sdio_read_byte(0, 0x110) | (sdio_read_byte(0, 0x111) << 8);
     puts("  function 1 on and ready, block size "); put_dec((u64)bs); puts(". Hello, Wi-Fi chip!\n");
@@ -302,12 +302,15 @@ static int wifi_fw(void) {
     puts("firmware: "); put_dec(fwlen); puts(" bytes built in; going 4-bit and faster\n");
     // faster bus: 4-bit (CCCR bus interface control), controller clock /16 of its source
     int bic = sdio_read_byte(0, 0x07);
-    if (bic < 0 || sdio_write_byte(0, 0x07, ((u32)bic & ~3u) | 2)) { err("WIFI", 6, "SDIO register read (CMD52) failed"); return 0; }
+    if (bic < 0 || sdio_write_byte(0, 0x07, ((u32)bic & ~3u) | 2)) { errs("WIFI", 6, 5, "SDIO register read (CMD52) failed"); return 0; }
     msdc_wr(SDC_CFG, (msdc_rd(SDC_CFG) & ~(3u << 16)) | (1u << 16));
     msdc_set_clock(4);
-    if (sdio_read_byte(0, 0x00) < 0) { err("WIFI", 9, "firmware upload failed: bus unreliable at the faster speed"); return 0; }
+    if (sdio_read_byte(0, 0x00) < 0) { errs("WIFI", 9, 1, "firmware upload failed: bus unreliable at the faster speed"); return 0; }
     // "new mode": data goes through one memory port at 0x10000 (reg numbers: Linux mwifiex_reg_sd8897)
     int v;
+    fn1_rd(0x03);                                                        // acknowledge the bootloader's first interrupt
+    if ((v = fn1_rd(0x01)) < 0 || fn1_wr(0x01, (u32)v | 0xff)) goto bad; // interrupt status: reset on read
+    if ((v = fn1_rd(0xcc)) < 0 || fn1_wr(0xcc, (u32)v | 0x10)) goto bad; // ready bits auto re-enable
     if ((v = fn1_rd(0xcd)) < 0 || fn1_wr(0xcd, (u32)v | 1)) goto bad;   // CMD53 new mode
     if ((v = fn1_rd(0xb8)) < 0 || fn1_wr(0xb8, (u32)v | 4)) goto bad;   // cmd port: read length from register
     if ((v = fn1_rd(0xb9)) < 0 || fn1_wr(0xb9, (u32)v | 1)) goto bad;   // cmd port: auto reset
@@ -321,7 +324,16 @@ static int wifi_fw(void) {
             if (cs >= 0 && (cs & 9) == 9) break;
             delay_us(500);
         }
-        if (tries == 2000) { err("WIFI", 9, "firmware upload failed: chip stopped asking for data"); return 0; }
+        if (tries == 2000) {
+            puts("  chip status 0x50 = "); put_hex((u32)cs); puts(" (need bits 0 and 3); function 1 registers:\n");
+            static const u8 dumpregs[] = {0x00, 0x01, 0x02, 0x03, 0x04, 0x50, 0x60, 0x61, 0xb4, 0xb8, 0xb9, 0xc0, 0xc1, 0xcc, 0xcd};
+            for (u32 i = 0; i < sizeof dumpregs; i++) {
+                puts(" "); put_hex(dumpregs[i]); puts("="); put_hex((u32)fn1_rd(dumpregs[i]));
+                if (i % 5 == 4) putc('\n');
+            }
+            errs("WIFI", 9, 2, "firmware upload failed: chip stopped asking for data");
+            return 0;
+        }
         if (offset >= fwlen) break;
         // how many bytes does the chip want next? (two 8-bit registers 0x60/0x61)
         u32 len = 0;
@@ -335,7 +347,7 @@ static int wifi_fw(void) {
         if (len > 2312) { err("WIFI", 10, "firmware upload failed: chip asked for an impossible length"); return 0; }
         u32 txlen = len;
         if (len & 1) {                           // odd length = "resend the last block"
-            if (++retries > 20) { err("WIFI", 9, "firmware upload failed: too many resend requests"); return 0; }
+            if (++retries > 20) { errs("WIFI", 9, 4, "firmware upload failed: too many resend requests"); return 0; }
             txlen = 0;
         } else {
             retries = 0;
@@ -346,7 +358,7 @@ static int wifi_fw(void) {
         int w = sdio_write_port(0x10000, buf, blocks);
         if (w) {
             puts("  block write failed: "); put_dec((u64)w); puts(" at offset "); put_dec(offset); putc('\n');
-            err("WIFI", 9, "firmware upload failed: data write to the chip failed");
+            errs("WIFI", 9, 3, "firmware upload failed: data write to the chip failed");
             return 0;
         }
         offset += txlen;
@@ -368,7 +380,7 @@ static int wifi_fw(void) {
     puts("  firmware status 0xfedc: the Wi-Fi firmware is RUNNING.\n");
     return 1;
 bad:
-    err("WIFI", 6, "SDIO register read (CMD52) failed");
+    errs("WIFI", 6, 6, "SDIO register read (CMD52) failed");
     return 0;
 }
 

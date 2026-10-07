@@ -213,7 +213,7 @@ static int kb_init(void) {
     puts("ec hello: "); put_dec((u64)(r < 0 ? -r : r)); puts(r < 0 ? " (wave-os error)" : " (ec result)");
     if (r == 0) { puts(" answer "); put_hex(buf[0] | buf[1] << 8 | (u32)buf[2] << 16 | (u32)buf[3] << 24); }
     puts(" spi timeouts "); put_dec(spi_timeouts); putc('\n');
-    if (r != 0) { err_ec(r); err("KB", 1, "keyboard unavailable: EC did not answer hello"); return 0; }
+    if (r != 0) { err_ec(r); errs("KB", 1, 1, "keyboard unavailable: EC did not answer hello"); return 0; }
     r = ec_cmd(EC_CMD_GET_VERSION, 0, 0, 0, buf, 96, &n);
     if (r == 0) { buf[31] = 0; puts("ec version: "); puts((const char *)buf); putc('\n'); } else err_ec(r);
     r = ec_cmd(EC_CMD_MKBP_INFO, 0, 0, 0, buf, 9, &n);
@@ -232,7 +232,7 @@ static int kb_init(void) {
         putc('\n');
         if (r == 0) break;
     }
-    if (r != 0) { err_ec(r); err("KB", 1, "keyboard unavailable: matrix read failed 3 times"); return 0; }
+    if (r != 0) { err_ec(r); errs("KB", 1, 2, "keyboard unavailable: matrix read failed 3 times"); return 0; }
     for (u32 c = 0; c < KB_COLS; c++) kb_state[c] = m[c];
     kb_ok = 1;
     return 1;
