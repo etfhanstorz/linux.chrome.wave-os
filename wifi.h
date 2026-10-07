@@ -442,6 +442,7 @@ bad:
 // Is a packet waiting on the command port? The status bit (0x03, read-to-clear) is easy to miss, so also look at the
 // packet-length registers 0xb4/0xb5 (v1.15 on hana: no status bit, but a 0x700-byte packet was sitting there).
 static u32 wifi_last_len;
+static u32 w1_err, w1_tries;              // last failed command write: controller error, attempts made
 static u32 w3_why, w3_a, w3_b;           // why a command answer was 'malformed': 1 = bad length (a), 2 = block read failed with error a for length b
 static u8 wifi_dbg[16];                   // first bytes of the last unexpected packet
 static u32 wifi_dbg_n;                  // how many unexpected packets were skipped
@@ -480,7 +481,19 @@ static int wifi_cmd(u32 cmd, const u8 *body, u32 blen, u8 *resp, u32 rmax, u32 *
     delay_us(5000);
     fn1_rd(0x03);                                                  // clear stale interrupt bits (reset on read)
     wifi_dn_seen = 0;
-    if (sdio_write_port(WCMD_PORT, wbuf, (total + 255) / 256)) return -1;
+    // A failed write can leave the controller's data path stuck: reset it and retry (up to 3 times).
+    for (u32 attempt = 1; ; attempt++) {
+        int we = sdio_write_port(WCMD_PORT, wbuf, (total + 255) / 256);
+        if (!we) break;
+        w1_err = (u32)we; w1_tries = attempt;
+        if (attempt >= 3) return -1;
+        msdc_wr(MSDC_CFG, msdc_rd(MSDC_CFG) | (1u << 2));                         // controller reset (keeps clock/bus settings)
+        for (int i = 0; i < 100000 && (msdc_rd(MSDC_CFG) & (1u << 2)); i++) ;
+        msdc_wr(MSDC_FIFOCS, msdc_rd(MSDC_FIFOCS) | (1u << 31));
+        for (int i = 0; i < 100000 && (msdc_rd(MSDC_FIFOCS) & (1u << 31)); i++) ;
+        msdc_wr(MSDC_INT, msdc_rd(MSDC_INT));
+        delay_us(5000);
+    }
     u64 hz = tick_hz(), t0 = ticks();
     for (;;) {
         int st = fn1_rd(0x03);                                     // host interrupt status
@@ -524,7 +537,7 @@ static int wifi_cmd_err(const char *name, int r, u32 sub_base) {
     if (r == 0) return 1;
     puts("  command "); puts(name); puts(": ");
     if (r > 0) { puts("firmware answered with error "); put_dec((u64)r); putc('\n'); errs("WIFI", 13, 1, "Wi-Fi firmware rejected a command"); }
-    else if (r == -1) { puts("send failed\n"); errs("WIFI", 12, 1, "could not send a command to the Wi-Fi firmware"); }
+    else if (r == -1) { puts("send failed (controller error "); put_dec(w1_err); puts(" after "); put_dec(w1_tries); puts(" tries)\n"); errs("WIFI", 12, 1, "could not send a command to the Wi-Fi firmware"); }
     else if (r == -2) { puts("no answer within 1 s\n"); errs("WIFI", 12, 2, "the Wi-Fi firmware did not answer a command"); }
     else {
         puts("malformed answer");
