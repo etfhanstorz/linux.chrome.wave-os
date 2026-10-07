@@ -622,7 +622,9 @@ static int scan_band(u32 radio, const u8 *chans, u32 nch) {
     put16(body + p, 0x01c5); put16(body + p + 2, 2); put16(body + p + 4, 50); p += 6;    // gap between channels: 50 TU
     u8 r[8]; u32 n = 0;
     scan_done = 0;
+    wifi_cmd_ms = 10000;                                            // the firmware answers only after the scan: Linux waits ~10 s
     int rc = wifi_cmd(0x0107, body, p, r, sizeof r, &n);
+    wifi_cmd_ms = 1000;
     if (!wifi_cmd_err("SCAN", rc, 0)) return 0;
     wifi_poll_events(6000);
     return 1;
