@@ -296,8 +296,11 @@ static int sdio_write_port(u32 addr, const u8 *data, u32 blocks) {
 #define MSDC_RXDATA 0x1c
 
 // CMD53 block read from function 1, fixed address. len = blocks * 256 bytes into out. Returns 0 or error.
+static u32 rd_got, rd_hw_timeout;        // last read: bytes that arrived, and whether the controller's own data timeout fired
 static int sdio_read_port(u32 addr, u8 *out, u32 blocks) {
     u32 len = blocks * 256, got = 0;
+    u32 save_div = (msdc_rd(MSDC_CFG) >> 8) & 0xff;
+    if (blocks > 1) msdc_set_clock(32);                              // big PIO reads: the FIFO is drained by hand, so slow the bus down (v1.19: data timeout on a 7-block read)
     for (int i = 0; i < 100000 && (msdc_rd(SDC_STS) & 3); i++) ;
     msdc_wr(MSDC_FIFOCS, msdc_rd(MSDC_FIFOCS) | (1u << 31));
     for (int i = 0; i < 100000 && (msdc_rd(MSDC_FIFOCS) & (1u << 31)); i++) ;
@@ -321,7 +324,9 @@ static int sdio_read_port(u32 addr, u8 *out, u32 blocks) {
         if ((st & INT_XFER_COMPL) && got >= len) break;
         if (hz && ticks() - t0 > hz / 2) { st |= INT_DATTMO; break; }
     }
+    rd_got = got; rd_hw_timeout = (st & INT_DATTMO) && !(hz && ticks() - t0 > hz / 2);
     msdc_wr(MSDC_INT, st);
+    if (blocks > 1) msdc_set_clock(save_div);
     if (st & (INT_CMDTMO | INT_RSPCRC | INT_DATTMO | INT_DATCRC)) return 1 + (int)((st >> 9) & 0x7f);
     return 0;
 }
@@ -524,7 +529,7 @@ static int wifi_cmd_err(const char *name, int r, u32 sub_base) {
     else {
         puts("malformed answer");
         if (w3_why == 1) { puts(": packet length "); put_dec(w3_a); puts(" is unusable"); }
-        else if (w3_why == 2) { puts(": reading the "); put_dec(w3_b); puts("-byte packet failed, controller error "); put_dec(w3_a); }
+        else if (w3_why == 2) { puts(": reading the "); put_dec(w3_b); puts("-byte packet failed (controller error "); put_dec(w3_a); puts("), "); put_dec(rd_got); puts(" bytes arrived, "); puts(rd_hw_timeout ? "controller timeout" : "our own 0.5 s timeout"); }
         putc('\n'); errs("WIFI", 12, 3, "the Wi-Fi firmware's answer was not understood"); }
     return 0;
 }

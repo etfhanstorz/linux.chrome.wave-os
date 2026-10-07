@@ -2,6 +2,7 @@
 // Each code is shown in yellow on screen, written to the log, and summarised in a status line
 // kept at the very top of the log, so `head -3` of console-ramoops-0 tells the story.
 
+static char area_digit(const char *a);
 struct errent { const char *area; u32 num; u32 sub; const char *what; };   // sub 0 = none, else the .N cause
 static struct errent err_seen[24];
 static u32 err_count;
@@ -24,7 +25,7 @@ static void status_update(void) {
     if (!err_count) { ADD("ok, no errors"); }
     for (u32 i = 0; i < err_count; i++) {
         if (i) ADD(" | ");
-        ADD(err_seen[i].area); ADD(".");                 // where it happened (WIFI, KB, DISP...)
+        { char a[3] = {area_digit(err_seen[i].area), '.', 0}; ADD(a); }   // where it happened (6 = Wi-Fi, 4 = keyboard...)
         char d[3] = {(char)('0' + err_seen[i].num / 10 % 10), (char)('0' + err_seen[i].num % 10), 0};
         ADD(d);                                            // which error
         if (err_seen[i].sub) { char s[3] = {'.', (char)('0' + err_seen[i].sub % 10), 0}; ADD(s); }   // which cause
@@ -35,8 +36,14 @@ static void status_update(void) {
     for (u32 i = 0; i < STATUS_WIDTH; i++) rlog_data[status_pos + i] = line[i];
 }
 
+// Area numbers: 1 BOOT, 2 LOG, 3 DISP, 4 KB (keyboard), 5 EC (the keyboard chip's own errors), 6 WIFI.
+static char area_digit(const char *a) {
+    if (streq(a, "BOOT")) return '1'; if (streq(a, "LOG")) return '2'; if (streq(a, "DISP")) return '3';
+    if (streq(a, "KB")) return '4'; if (streq(a, "EC")) return '5'; if (streq(a, "WIFI")) return '6';
+    return '0';
+}
 static void put_code(const char *area, u32 num, u32 sub) {
-    puts(area); putc('.'); putc('0' + num / 10 % 10); putc('0' + num % 10);
+    putc(area_digit(area)); putc('.'); putc('0' + num / 10 % 10); putc('0' + num % 10);
     if (sub) { putc('.'); putc('0' + sub % 10); }
 }
 
