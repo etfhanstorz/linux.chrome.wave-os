@@ -77,6 +77,16 @@ the EC sent back (`EC_RES_*` in Linux `cros_ec_commands.h`).
 | **6.15.4** | The network does not offer a WPA2 password (PSK) login | |
 | **6.15.5** | The network requires protected management frames (not supported yet) | |
 | **6.15.6** | The network was not found, so there was nothing to join | |
+| **6.16.1** | The router never started the password handshake (or its first message was not what we expected) | |
+| **6.16.2** | The router sent no handshake message 3: the password is probably wrong | |
+| **6.16.3** | Handshake message 3 was malformed, failed its signature check (wrong password) or the router changed its nonce | |
+| **6.16.4** | The group key in message 3 could not be decrypted or was missing | |
+| **6.16.5** | The Wi-Fi chip refused an encryption key | |
+| **6.16.6** | A handshake message could not be sent (no free data port) | |
+| **6.16.7** | The password must be 8 to 63 characters | |
+| **6.17.1** | Connected, but the router gave no network address (DHCP) | |
+| **7.01.1** | Not connected: run k (wificonnect) first | |
+| **7.01.2** | No ping answer | |
 
 ## 7 Network and update
 

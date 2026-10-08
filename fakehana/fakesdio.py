@@ -85,6 +85,9 @@ class FakeFirmwareLoader:
         self.data_ptr = 0                # next data port the chip fills (rolling, like Linux curr_rd_port)
         self.partial = {}                # data port -> bytes not yet read (byte-mode reads come in 512-byte pieces)
         self.assoc = None                # set when the host associated: (bssid, ssid)
+        self.lan = None                  # the fake LAN behind the router (set by fakehana.py)
+        self.ap = None                   # the fake WPA2 router (made on first use)
+        self.keys_set = []               # key install commands seen: (pairwise?, key accepted?)
         self.queue = []                  # packets waiting for the host on the command port (answers + events)
         self.cmds = []                   # host commands seen: (command, result)
         self.mask = 0                    # reg 0x02: host interrupt mask (MODEL: status bits only show when unmasked, as in Linux mwifiex)
@@ -108,7 +111,8 @@ class FakeFirmwareLoader:
         self.pos = 0; self.i = 0; self.acked = False
         self.cfg = {0xcd: 0, 0xb8: 0, 0xb9: 0, 0x01: 0, 0xcc: 0}
         self.mask = 0; self.int_status = 0; self.cmd_resp = b''; self.queue = []
-        self.data_q = {}; self.data_ptr = 0; self.partial = {}; self.assoc = None
+        self.data_q = {}; self.data_ptr = 0; self.partial = {}; self.assoc = None; self.keys_set = []
+        self.ap = None
         self.cold_boots = getattr(self, 'cold_boots', 0) + 1
 
     def push_data(self, dst, src, ethertype, payload):
@@ -181,7 +185,21 @@ class FakeFirmwareLoader:
                 ap = peer; me = bytes.fromhex('0050431a2b3c')
                 # the router starts the password handshake: EAPOL-Key message 1 (descriptor 2, key info 0x008a, replay counter 1, ANonce)
                 key = bytes([2]) + struct.pack('>HHQ', 0x008a, 16, 1) + bytes(range(32)) + bytes(16) + bytes(8) + bytes(8) + bytes(16) + struct.pack('>H', 0)
-                self.push_data(me, ap, 0x888e, bytes([2, 3]) + struct.pack('>H', len(key)) + key)
+                import fakeap
+                self.ap = fakeap.FakeAP(self)
+                self.ap.start(me)
+        elif cmd == 0x005e:                              # KEY_MATERIAL v2: action(2) TLV(type 0x019c, len 52: mac6 idx type info(2) pn8 keylen(2) key32)
+            tt, tl = struct.unpack_from('<HH', d, 14)
+            t = bytes(d[18:18 + tl])
+            info, klen = struct.unpack_from('<H', t, 8)[0], struct.unpack_from('<H', t, 18)[0]
+            key = t[20:20 + klen]
+            want = None
+            if self.ap and self.ap.done:
+                want = self.ap.tk if info & 2 else self.ap.gtk
+            ok = tt == 0x019c and tl == 52 and t[7] == 2 and klen == 16 and key == want
+            self.keys_set.append(('ptk' if info & 2 else 'gtk', ok, hex(info)))
+            if not ok:
+                result = 1
         elif cmd == 0x0006:                              # legacy SCAN: a few invented access points
             aps = [(b'HomeNet', '02:11:22:33:44:01', 52, 6, True), (b'CoffeeShop-Guest', '02:11:22:33:44:02', 71, 1, False),
                    (b'Neighbour5G', '02:11:22:33:44:03', 80, 149, True), (b'', '02:11:22:33:44:04', 85, 11, True)]
@@ -275,8 +293,26 @@ class FakeFirmwareLoader:
         if r in self.cfg:
             self.cfg[r] = v
 
+    def guest_frame(self, frame):
+        """The host sent a data frame (Ethernet II): handshake frames go to the router, everything else to the LAN once the keys are in."""
+        et = struct.unpack('>H', frame[12:14])[0]
+        if et == 0x888e:
+            if self.ap: self.ap.on_eapol(frame[6:12], frame[14:])
+        elif self.ap and self.ap.done and self.lan:
+            self.lan.guest_mac = bytes(frame[6:12])
+            self.lan.from_guest(bytes(frame))
+            while self.lan.rx:
+                f = self.lan.rx.pop(0)
+                self.push_data(f[0:6], f[6:12], struct.unpack('>H', f[12:14])[0], f[14:])
+
     def port_write(self, data, addr=0x10000):
         """A CMD53 block write to the memory port: must be exactly what the ROM asked for."""
+        if 0x10000 <= addr < 0x10020 and (self.running or self.pos >= len(self.fw)):          # firmware is up: this is a data port, not the download port
+            total, typ = struct.unpack_from('<HH', data, 0)
+            if typ == 0:
+                flen, off = struct.unpack_from('<HH', data, 6)
+                self.guest_frame(bytes(data[4 + off:4 + off + flen]))
+            return
         if addr == 0x18000:                              # command port of the running firmware
             self.host_command(data)
             return

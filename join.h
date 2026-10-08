@@ -10,6 +10,7 @@ static u32 rd_cur_port, wr_cur_port;      // next data port to read / write (rol
 static u32 rx_pkts, rx_eapol, rx_other, rx_errs, rx_events;
 static u16 rx_first_type; static u8 rx_first_info[32]; static u32 rx_first_len;
 static int joined; static u8 join_aid;
+static u8 our_rsn[22];                  // the RSN element we sent when associating (the handshake repeats it in message 2)
 
 static int fn1_rd_u32(u32 reg, u32 *v) {   // four consecutive 8-bit registers, little endian
     u32 r = 0;
@@ -105,12 +106,14 @@ static int wifi_assoc(void) {
     put16(body + p, 0x011f); put16(body + p + 2, 2); put16(body + p + 4, 0); p += 6;   // authentication type: open system (WPA2 passwords come later, in the handshake)
     put16(body + p, 0x0101); put16(body + p + 2, 7); p += 4;      // channel list: just the router's channel
     body[p] = target.chan >= 36 ? 1 : 0; body[p + 1] = target.chan; body[p + 2] = 0; put16(body + p + 3, 0); put16(body + p + 5, 0); p += 7;
+    u32 rs = p;
     put16(body + p, 48); put16(body + p + 2, 20); p += 4;         // our RSN element: WPA2, CCMP for both keys, PSK login, no extras
     body[p++] = 1; body[p++] = 0;
     for (u32 i = 0; i < 4; i++) body[p++] = group[i];             // group cipher: whatever the router uses
     body[p++] = 1; body[p++] = 0; body[p++] = 0x00; body[p++] = 0x0f; body[p++] = 0xac; body[p++] = 4;   // one pairwise cipher: CCMP
     body[p++] = 1; body[p++] = 0; body[p++] = 0x00; body[p++] = 0x0f; body[p++] = 0xac; body[p++] = 2;   // one login: PSK
     body[p++] = 0; body[p++] = 0;                                 // RSN capabilities
+    our_rsn[0] = 48; our_rsn[1] = 20; for (u32 i = 0; i < 20; i++) our_rsn[2 + i] = body[rs + 4 + i];
     u8 r[32]; u32 n = 0;
     wifi_cmd_ms = 8000;
     int rc = wifi_cmd(0x0012, body, p, r, sizeof r, &n);

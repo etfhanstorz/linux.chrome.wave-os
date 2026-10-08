@@ -61,7 +61,7 @@ static void fill(const struct fb *f, u32 rgb) {
 
 #include "rlog.h"
 #include "console.h"
-#define VERSION "wave-os v1.52"
+#define VERSION "wave-os v1.53"
 #include "err.h"
 #include "sys.h"
 #include "prof.h"
@@ -73,6 +73,7 @@ static void fill(const struct fb *f, u32 rgb) {
 #include "net.h"
 #include "update.h"
 #include "ec.h"
+#include "wpa.h"
 #include "shell.h"
 #ifdef QEMU
 #include "qemu_ramfb.h"

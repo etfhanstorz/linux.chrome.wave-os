@@ -27,6 +27,9 @@ class KeyScript:
         shift = next(rc for rc, k in keymap.KEYS.items() if k == 'LEFTSHIFT')
         t = start_s
         for ch in text:
+            if ch == '\x01':                              # pause token: 5 simulated seconds without typing (lets slow commands finish)
+                t += 5.0
+                continue
             if ch not in pos:
                 raise ValueError('fake keyboard has no key for %r' % ch)
             r, c, shifted = pos[ch]

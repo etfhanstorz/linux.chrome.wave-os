@@ -131,6 +131,8 @@ class Machine:
         fw = open(fw_path, 'rb').read() if os.path.exists(fw_path) else None
         self.msdc = FakeMSDC(self, self.regs, fw, args.fw_running)
         self.net = FakeNet()                          # virtual network card + a tiny fake LAN (fake-only)
+        if self.msdc.loader:
+            self.msdc.loader.lan = self.net            # the fake Wi-Fi router forwards to the same fake LAN
         img = args.update_image
         if img and os.path.exists(img):                # the fake PC's update server: /Image and a signed /manifest
             data = open(img, 'rb').read()

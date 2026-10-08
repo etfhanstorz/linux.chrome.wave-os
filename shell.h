@@ -27,6 +27,7 @@ static void run_cmd(char *line) {
     if (!*line) return;
     static char al_arg[24];                                            // short aliases for the long test commands: c = wifichan 157 HomeWifi, f = wififind HomeWifi
     if (streq(line, "c")) { line = "wifichan"; const char *a = "157 HomeWifi"; u32 q = 0; while ((al_arg[q] = a[q])) q++; arg = al_arg; }
+    else if (streq(line, "k")) { line = "wificonnect"; const char *a = "HomeWifi"; u32 q = 0; while ((al_arg[q] = a[q])) q++; arg = al_arg; }
     else if (streq(line, "j")) { line = "wifijoin"; const char *a = "HomeWifi"; u32 q = 0; while ((al_arg[q] = a[q])) q++; arg = al_arg; }
     else if (streq(line, "f")) { line = "wififind"; const char *a = "HomeWifi"; u32 q = 0; while ((al_arg[q] = a[q])) q++; arg = al_arg; }
     char name[16]; { u32 q = 0; while (line[q] && q < 15) { name[q] = line[q]; q++; } name[q] = 0; }
@@ -35,7 +36,7 @@ static void run_cmd(char *line) {
     u64 t_cmd = ticks();
     run_cmd2(line, arg);
     if (!streq(name, "prof")) prof_last_total = ticks() - t_cmd;
-    if ((name[0] == 'w' && name[1] == 'i') || streq(name, "update") || streq(name, "cryptotest") || streq(name, "netdemo")) {   // one-line summary: command, what it says, error codes
+    if ((name[0] == 'w' && name[1] == 'i') || streq(name, "update") || streq(name, "cryptotest") || streq(name, "netdemo") || streq(name, "ping")) {   // one-line summary: command, what it says, error codes
         u32 keep = con_fg;                                            // coloured: green = fine, red = errors
         con_fg = cmd_codes_n ? 0xFF6060 : 0x60FF80; outs("> "); con_fg = 0x40E0FF; outs(name); out(' ');
         con_fg = cmd_codes_n ? 0xFFE040 : C_TEXT;
@@ -46,7 +47,7 @@ static void run_cmd(char *line) {
     }
 }
 static void run_cmd2(char *line, char *arg) {
-    if (streq(line, "help")) outs("commands: c f j r opt prof wifi5 wifijoin help version info echo color clear errors wifi wifion wififw wifiinit netdemo update wifichan wififind wifitry wifiv wifigap wifidiv wifiscan wifiscanm wifiscanblk wifiscan5 cryptotest reboot\n");
+    if (streq(line, "help")) outs("commands: c f j k r ping opt prof wifi5 wifijoin wificonnect help version info echo color clear errors wifi wifion wififw wifiinit netdemo update wifichan wififind wifitry wifiv wifigap wifidiv wifiscan wifiscanm wifiscanblk wifiscan5 cryptotest reboot\n");
     else if (streq(line, "version")) outs(VERSION "\n");
     else if (streq(line, "info")) cmd_info();
     else if (streq(line, "echo")) { outs(arg); out('\n'); }
@@ -64,6 +65,8 @@ static void run_cmd2(char *line, char *arg) {
     else if (streq(line, "wifichan")) wifi_chan(arg);
     else if (streq(line, "wifi5")) wifi_5g(arg);
     else if (streq(line, "wifijoin")) wifi_join(*arg ? arg : "HomeWifi");
+    else if (streq(line, "wificonnect")) wifi_connect(*arg ? arg : "HomeWifi");
+    else if (streq(line, "ping")) wifi_ping(arg);
     else if (streq(line, "opt")) { if (*arg >= '0' && *arg <= '9') opt_toggle(*arg - '0'); opt_list(); }
     else if (streq(line, "prof")) {
         outs("P "); u64 tot = 0;

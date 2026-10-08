@@ -101,7 +101,7 @@ class FakeNet:
         seg = bytes(h) + data
         ph = ip2b(PC_IP) + ip2b(GUEST_IP) + struct.pack('>BBH', 0, 6, len(seg))
         struct.pack_into('>H', h, 16, csum(ph + seg)); seg = bytes(h) + data
-        return self.ip_packet(PC_IP, GUEST_IP, 6, seg, GUEST_MAC, PC_MAC)
+        return self.ip_packet(PC_IP, GUEST_IP, 6, seg, getattr(self, 'guest_mac', GUEST_MAC), PC_MAC)
 
     def tcp_server(self, srcmac, p):
         sport, dport, seq, ack, off, fl = struct.unpack('>HHIIBB', p[:14]); hl = (off >> 4) * 4; data = p[hl:]
