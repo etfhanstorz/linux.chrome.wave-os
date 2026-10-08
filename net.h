@@ -322,11 +322,32 @@ static int tcp_connect(u32 ip, u32 port) {
     return tcp.state == TCP_ESTAB ? 0 : -2;
 }
 
+// What the last http_get saw in the reply headers (the browser follows redirects and picks the page type from these).
+static int http_status;                                   // 200, 302, 404 ... (0 = none)
+static char http_location[256], http_ctype[48];           // Location: and Content-Type: values
+static int http_any;                                      // 1 = return the body for any status; 0 = only 200 (what `up` wants)
+static int ci_prefix(const u8 *s, const char *p) { for (u32 i = 0; p[i]; i++) { u32 a = s[i] | 0x20, b = (u32)p[i] | 0x20; if (a != b) return 0; } return 1; }
+static void http_parse_headers(const u8 *h, u32 n) {
+    http_status = 0; http_location[0] = 0; http_ctype[0] = 0;
+    if (n >= 12 && h[0] == 'H') { u32 i = 0; while (i < n && h[i] != ' ') i++; i++; while (i < n && h[i] >= '0' && h[i] <= '9') http_status = http_status * 10 + (h[i++] - '0'); }
+    for (u32 i = 0; i < n; i++) {
+        if (i && h[i - 1] != '\n') continue;                                                   // only at the start of a line
+        char *dst = 0; u32 max = 0, skip = 0;
+        if (i + 9 < n && ci_prefix(h + i, "location:")) { dst = http_location; max = sizeof http_location; skip = 9; }
+        else if (i + 13 < n && ci_prefix(h + i, "content-type:")) { dst = http_ctype; max = sizeof http_ctype; skip = 13; }
+        if (!dst) continue;
+        u32 j = i + skip, k = 0;
+        while (j < n && (h[j] == ' ' || h[j] == '\t')) j++;
+        while (j < n && h[j] != '\r' && h[j] != '\n' && k + 1 < max) dst[k++] = (char)h[j++];
+        dst[k] = 0;
+    }
+}
+
 // HTTP/1.0 GET into dst (max bytes). Returns the body length, or a negative error:
 // -1 no route, -2 no connection, -3 timeout, -4 bad reply, -5 too big, -6 HTTP status was not 200
 static int http_get(u32 ip, u32 port, const char *host, const char *path, u8 *dst, u32 max, u32 timeout_ms) {
     static u8 req[300]; u32 n = 0;
-    const char *parts[] = {"GET ", path, " HTTP/1.0\r\nHost: ", host, "\r\nConnection: close\r\n\r\n"};
+    const char *parts[] = {"GET ", path, " HTTP/1.0\r\nHost: ", host, "\r\nUser-Agent: wave-os\r\nAccept: text/html, text/plain, */*\r\nConnection: close\r\n\r\n"};
     for (u32 k = 0; k < 5; k++) for (u32 i = 0; parts[k][i] && n < sizeof req; i++) req[n++] = parts[k][i];
     tcp.dst = dst; tcp.dstmax = max;
     int r = tcp_connect(ip, port);
@@ -348,10 +369,70 @@ static int http_get(u32 ip, u32 port, const char *host, const char *path, u8 *ds
     if (tcp.overflow) return -5;
     u32 total = tcp.got, hdr = 0;
     for (u32 i = 0; i + 3 < total; i++) if (dst[i] == '\r' && dst[i + 1] == '\n' && dst[i + 2] == '\r' && dst[i + 3] == '\n') { hdr = i + 4; break; }
-    if (!hdr || total < 12 || dst[9] != '2' || dst[10] != '0' || dst[11] != '0') return hdr ? -6 : -4;
+    if (hdr) http_parse_headers(dst, hdr);
+    if (!hdr || total < 12) return -4;
+    if (!http_any && (dst[9] != '2' || dst[10] != '0' || dst[11] != '0')) return -6;
     for (u32 i = hdr; i < total; i++) dst[i - hdr] = dst[i];                 // slide the body to the start
     return (int)(total - hdr);
 }
+// ---- DNS: ask the router's DNS server (from DHCP) for an address (v1.6) ----
+static char dns_cache_name[6][64]; static u32 dns_cache_ip[6], dns_cache_n;
+static int dns_name_len(const u8 *p, u32 left) {            // length of a (possibly compressed) name at p, or -1
+    u32 i = 0;
+    while (i < left) {
+        u32 l = p[i];
+        if (l == 0) return (int)i + 1;
+        if ((l & 0xc0) == 0xc0) return (int)i + 2;
+        i += 1 + l;
+    }
+    return -1;
+}
+// Returns 0 and the address in *ip, or: -1 no network / no DNS server, -2 the name does not exist, -3 no answer, -4 bad name
+static int dns_lookup(const char *name, u32 *ip) {
+    u32 lit = 0;
+    { const char *s = name; u32 dots = 0, ok = *s != 0; for (; *s; s++) { if (*s == '.') dots++; else if (*s < '0' || *s > '9') ok = 0; } if (ok && dots == 3) { u32 v[4] = {0, 0, 0, 0}, k = 0; for (s = name; *s; s++) { if (*s == '.') k++; else v[k] = v[k] * 10 + (*s - '0'); } lit = v[0] << 24 | v[1] << 16 | v[2] << 8 | v[3]; } }
+    if (lit) { *ip = lit; return 0; }                                                       // already a number
+    for (u32 i = 0; i < dns_cache_n && i < 6; i++) { u32 k = 0; while (name[k] && name[k] == dns_cache_name[i][k]) k++; if (!name[k] && !dns_cache_name[i][k]) { *ip = dns_cache_ip[i]; return 0; } }
+    if (!net_ip || !net_dns) return -1;
+    static u8 q[300]; u32 n = 12;
+    mset(q, 0, 12); u32 id = (u32)ticks() & 0xffff; be16w(q, id); be16w(q + 2, 0x0100); be16w(q + 4, 1);       // standard query, recursion desired, one question
+    for (u32 i = 0; name[i];) {                                                              // name as labels
+        u32 j = i; while (name[j] && name[j] != '.') j++;
+        if (j == i || j - i > 63 || n + (j - i) + 6 > sizeof q) return -4;
+        q[n++] = (u8)(j - i); for (u32 k = i; k < j; k++) q[n++] = (u8)name[k];
+        i = name[j] ? j + 1 : j;
+    }
+    q[n++] = 0; be16w(q + n, 1); be16w(q + n + 2, 1); n += 4;                                // type A, class IN
+    u32 sport = 49300 + (id & 0xff);
+    udp_listen_port = sport;
+    for (int attempt = 0; attempt < 3; attempt++) {
+        udp_in_got = 0;
+        if (net_udp(net_dns, sport, 53, q, n)) continue;
+        net_wait_ms(1500, (int *)&udp_in_got);
+        if (!udp_in_got || udp_in_len < 12 || be16r(udp_in) != id) continue;
+        udp_listen_port = 0;
+        u32 rcode = be16r(udp_in + 2) & 15, qd = be16r(udp_in + 4), an = be16r(udp_in + 6);
+        if (rcode == 3) return -2;
+        if (rcode) return -3;
+        u32 p = 12;
+        for (u32 i = 0; i < qd; i++) { int l = dns_name_len(udp_in + p, udp_in_len - p); if (l < 0) return -3; p += l + 4; }
+        for (u32 i = 0; i < an && p + 10 <= udp_in_len; i++) {
+            int l = dns_name_len(udp_in + p, udp_in_len - p); if (l < 0) return -3; p += l;
+            u32 type = be16r(udp_in + p), rdl = be16r(udp_in + p + 8); p += 10;
+            if (p + rdl > udp_in_len) return -3;
+            if (type == 1 && rdl == 4) {
+                *ip = be32r(udp_in + p);
+                u32 s = dns_cache_n % 6; u32 k = 0; while (name[k] && k < 63) { dns_cache_name[s][k] = name[k]; k++; } dns_cache_name[s][k] = 0; dns_cache_ip[s] = *ip; dns_cache_n++;
+                return 0;
+            }
+            p += rdl;
+        }
+        return -3;
+    }
+    udp_listen_port = 0;
+    return -3;
+}
+
 // ---- the virtual network card of the fake Chromebook (never present on the real machine) ----
 #define FAKENIC 0x1f000000UL
 static int fakenic_present(void) { return rd32(FAKENIC) == 0x43494e57; }     // 'WNIC'; fault-safe read

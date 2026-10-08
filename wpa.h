@@ -325,3 +325,15 @@ static int wifi_rdsweep(const char *arg) {
     if (first_good != 99) { sum_s(", first: #"); sum_u(first_good); }
     return 1;
 }
+
+// dns NAME: look a name up (v1.6)
+static int wifi_dns(const char *arg) {
+    if (!*arg) { sum_s("usage: dns NAME"); return 0; }
+    u32 ip = 0; int r = dns_lookup(arg, &ip);
+    if (r == -1) { errs("NET", 30, 1, "no DNS server: connect first (k)"); sum_s("no network"); return 0; }
+    if (r == -2) { errs("NET", 30, 2, "that name does not exist"); sum_s("no such name"); return 0; }
+    if (r == -4) { errs("NET", 30, 4, "not a valid name"); sum_s("bad name"); return 0; }
+    if (r) { errs("NET", 30, 3, "the DNS server did not answer"); sum_s("no answer"); return 0; }
+    sum_u(ip >> 24); sum_c('.'); sum_u(ip >> 16 & 255); sum_c('.'); sum_u(ip >> 8 & 255); sum_c('.'); sum_u(ip & 255);
+    return 1;
+}

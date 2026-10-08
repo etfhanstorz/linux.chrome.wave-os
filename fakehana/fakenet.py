@@ -32,6 +32,8 @@ class FakeNet:
         self.routes = {}            # HTTP server on the fake PC (port 8000): path -> bytes
         self.conns = {}             # guest port -> server state
         self.http_log = []
+        self.dns_names = {'example.test': PC_IP, 'site.test': PC_IP, 'example.com': PC_IP}   # the router's DNS: these names exist, everything else does not
+        self.web = {}                                # port 80 on the fake PC: path -> (status, extra headers, body)
 
     # ---- MMIO ----
     def read(self, off):
@@ -79,11 +81,14 @@ class FakeNet:
         if proto == 17 and len(p) >= 8:
             sport, dport, ulen = struct.unpack('>HHH', p[:6]); data = p[8:ulen]
             if dport == 67: return self.dhcp(src, data)
+            if dport == 53 and dstip in (GW_IP, PC_IP) and len(data) > 12: return self.dns(src, sport, srcip, dstip, data)
             if dport == 5140 and dstip == PC_IP:
                 self.log_lines.append(data.decode(errors='replace')); self.events.append('PC log server got: %s' % self.log_lines[-1]); return
             if dport == 7:
                 u = struct.pack('>HHHH', 7, sport, 8 + len(data), 0) + data
                 self.send(self.ip_packet(dstip, srcip, 17, u, src, GW_MAC if dstip == GW_IP else PC_MAC)); return
+        if proto == 6 and dstip == PC_IP and len(p) >= 20 and struct.unpack('>H', p[2:4])[0] == 80:
+            return self.tcp_server(src, p, port=80)
         if proto == 6 and dstip == PC_IP and len(p) >= 20:
             return self.tcp_server(src, p)
         if proto == 1 and p and p[0] == 8 and dstip in (GW_IP, PC_IP):        # ping
@@ -103,9 +108,22 @@ class FakeNet:
         struct.pack_into('>H', h, 16, csum(ph + seg)); seg = bytes(h) + data
         return self.ip_packet(PC_IP, GUEST_IP, 6, seg, getattr(self, 'guest_mac', GUEST_MAC), PC_MAC)
 
-    def tcp_server(self, srcmac, p):
+    def dns(self, srcmac, sport, srcip, dstip, q):
+        """Answer an A query (names in self.dns_names; anything else is NXDOMAIN)."""
+        i = 12; labels = []
+        while i < len(q) and q[i]:
+            labels.append(q[i + 1:i + 1 + q[i]].decode(errors='replace')); i += 1 + q[i]
+        name = '.'.join(labels); question = q[12:i + 5]
+        ip = self.dns_names.get(name)
+        hdr = q[0:2] + (b'\x81\x80' if ip else b'\x81\x83') + struct.pack('>HHHH', 1, 1 if ip else 0, 0, 0)
+        ans = (b'\xc0\x0c' + struct.pack('>HHIH', 1, 1, 60, 4) + ip2b(ip)) if ip else b''
+        self.events.append('dns %s -> %s' % (name, ip))
+        u = struct.pack('>HHHH', 53, sport, 8 + len(hdr) + len(question) + len(ans), 0) + hdr + question + ans
+        self.send(self.ip_packet(dstip, srcip, 17, u, srcmac, GW_MAC if dstip == GW_IP else PC_MAC))
+
+    def tcp_server(self, srcmac, p, port=8000):
         sport, dport, seq, ack, off, fl = struct.unpack('>HHIIBB', p[:14]); hl = (off >> 4) * 4; data = p[hl:]
-        if dport != 8000: return
+        if dport != port: return
         st = self.conns.get(sport)
         if fl & 2:                                                          # SYN
             mss = 1460                                                  # honour the MSS option in the client's SYN, like a real server
@@ -116,26 +134,30 @@ class FakeNet:
                 if p[i] == 2 and p[i + 1] == 4: mss = struct.unpack('>H', p[i + 2:i + 4])[0]
                 i += max(2, p[i + 1])
             st = self.conns[sport] = dict(snd=5000, rcv=seq + 1, sent=False, mss=mss)
-            self.send(self.tcp_packet(8000, sport, st['snd'], st['rcv'], 18, mss=True)); st['snd'] += 1
+            self.send(self.tcp_packet(port, sport, st['snd'], st['rcv'], 18, mss=True)); st['snd'] += 1
             return
         if not st: return
         if data and not st['sent']:
             st['rcv'] = seq + len(data); st['sent'] = True
             line = data.split(b'\r\n')[0].decode(errors='replace'); path = line.split(' ')[1] if ' ' in line else '/'
             self.http_log.append(path)
-            body = self.routes.get(path)
-            if body is None: resp = b'HTTP/1.0 404 Not Found\r\nContent-Length: 0\r\n\r\n'
-            else: resp = b'HTTP/1.0 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: %d\r\n\r\n' % len(body) + body
+            if port == 80:                                      # the fake web server: (status, extra headers, body)
+                status, extra, body = self.web.get(path, (404, '', b'<html><body><h1>Not Found</h1></body></html>'))
+                resp = ('HTTP/1.0 %d X\r\nContent-Type: text/html\r\n%sContent-Length: %d\r\n\r\n' % (status, extra, len(body))).encode() + body
+            else:
+                body = self.routes.get(path)
+                if body is None: resp = b'HTTP/1.0 404 Not Found\r\nContent-Length: 0\r\n\r\n'
+                else: resp = b'HTTP/1.0 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: %d\r\n\r\n' % len(body) + body
             self.events.append('http GET %s -> %d bytes' % (path, len(resp)))
             m = st.get('mss', 1460)
             for i in range(0, len(resp), m):
                 chunk = resp[i:i + m]; last = i + m >= len(resp)
-                self.send(self.tcp_packet(8000, sport, st['snd'], st['rcv'], 25 if last else 24, chunk))        # ACK|PSH (+FIN on the last)
+                self.send(self.tcp_packet(port, sport, st['snd'], st['rcv'], 25 if last else 24, chunk))        # ACK|PSH (+FIN on the last)
                 st['snd'] += len(chunk)
             st['snd'] += 1                                                  # the FIN
             return
         if fl & 1:                                                          # guest FIN: acknowledge it
-            self.send(self.tcp_packet(8000, sport, st['snd'], seq + 1, 16))
+            self.send(self.tcp_packet(port, sport, st['snd'], seq + 1, 16))
     def dhcp(self, guest_mac, d):
         if len(d) < 240: return
         xid = d[4:8]; mt = 0; i = 240
