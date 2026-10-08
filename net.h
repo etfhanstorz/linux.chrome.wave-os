@@ -34,6 +34,7 @@ static u32 csum(const u8 *p, u32 n, u32 sum) {
 // ---- last received packets of interest (filled by net_poll) ----
 static u8 udp_in[1500]; static u32 udp_in_len, udp_in_port, udp_in_src, udp_in_got;      // last UDP payload for our listening port
 static u32 udp_listen_port;
+static int (*udp_hook)(u32 src, u32 dport, const u8 *data, u32 len);   // a program that wants other UDP packets (rsh.h: the remote shell); returns 1 if it took the packet
 static u32 icmp_reply_seen, icmp_reply_id, icmp_reply_seq, icmp_reply_ttl;
 static u8 icmp_reply_buf[1500]; static u32 icmp_reply_len, icmp_reply_csum_ok;       // the last ping reply as it arrived (kept even if damaged while rxtest_on)
 static u8 dhcp_in[600]; static u32 dhcp_in_len, dhcp_in_got;
@@ -136,6 +137,7 @@ static void net_handle(const u8 *f, u32 len) {
         u32 sport = be16r(p), dport = be16r(p + 2), ulen = be16r(p + 4);
         if (ulen < 8 || ulen > plen) return;
         if ((p[6] | p[7]) && !l4_ok(17, src, dst, p, ulen)) { net_bad_l4++; return; }             // checksum 0 = none (legal over IPv4)
+        if (udp_hook && udp_hook(src, dport, p + 8, ulen - 8)) return;
         if (dport == 68 && ulen - 8 <= sizeof dhcp_in) { mcopy(dhcp_in, p + 8, ulen - 8); dhcp_in_len = ulen - 8; dhcp_in_got = 1; }
         else if (udp_listen_port && dport == udp_listen_port && ulen - 8 <= sizeof udp_in) {
             mcopy(udp_in, p + 8, ulen - 8); udp_in_len = ulen - 8; udp_in_port = sport; udp_in_src = src; udp_in_got = 1;

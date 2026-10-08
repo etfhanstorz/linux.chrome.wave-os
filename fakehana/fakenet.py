@@ -114,6 +114,14 @@ class FakeNet:
         struct.pack_into('>H', h, 16, csum(ph + seg)); seg = bytes(h) + data
         return self.ip_packet(PC_IP, GUEST_IP, 6, seg, getattr(self, 'guest_mac', GUEST_MAC), PC_MAC)
 
+    def send_rsh(self, command, key, seq):
+        """The fake PC sends a signed remote-shell command to the guest (UDP port 5150)."""
+        sb = struct.pack('>Q', seq); cb = command.encode()
+        mac = hmac.new(key, sb + cb, hashlib.sha256).digest()[:16]
+        payload = b'WRSH' + sb + mac + cb
+        u = struct.pack('>HHHH', 5141, 5150, 8 + len(payload), 0) + payload
+        self.send(self.ip_packet(PC_IP, GUEST_IP, 17, u, getattr(self, 'guest_mac', GUEST_MAC), PC_MAC))
+
     def dns(self, srcmac, sport, srcip, dstip, q):
         """Answer an A query (names in self.dns_names; anything else is NXDOMAIN)."""
         i = 12; labels = []

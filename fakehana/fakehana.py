@@ -163,6 +163,7 @@ class Machine:
         self.spi = FakeSPI(self.ec)
         self.spi.stall = args.spi_stall
         self.stop_at = None
+        self.rsh_events = sorted((int(float(t) * TIMER_HZ), c) for c, t in (e.rsplit('@', 1) for e in args.rsh.split(';'))) if args.rsh else []
         if args.run_seconds:
             self.stop_at = int(args.run_seconds * TIMER_HZ)
         elif self.keys:
@@ -337,6 +338,16 @@ class Machine:
             self.ticks += TIMER_HZ // 1000
             uc.reg_write(reg, self.ticks)
             self._check_wdt()
+            if self.rsh_events and self.ticks >= self.rsh_events[0][0]:      # --rsh: the fake PC types a command into the remote shell
+                _, cmd = self.rsh_events.pop(0)
+                import time as _t
+                kf = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'update_key.txt')
+                key = bytes.fromhex(open(kf).read().strip())
+                self.net.send_rsh(cmd, key, int(_t.time() * 1000) + len(self.rsh_events))
+                ld = self.msdc.loader
+                while self.net.rx:
+                    fr = self.net.rx.pop(0)
+                    ld.push_data(fr[0:6], fr[6:12], struct.unpack('>H', fr[12:14])[0], fr[14:])
             if self.stop_at is not None and self.ticks >= self.stop_at:
                 self._stop('DONE', 'stopped at fake time %.1f s' % (self.ticks / TIMER_HZ))
             return True
@@ -463,6 +474,7 @@ def main():
     ap.add_argument('--spi-stall', type=int, default=0, help='scenario: the first N SPI packets never complete')
     ap.add_argument('--fw-running', action='store_true', default=True, help='the chip comes up with its firmware already running (real hana)')
     ap.add_argument('--fw-cold', dest='fw_running', action='store_false', help='the chip boots from ROM and needs the firmware uploaded')
+    ap.add_argument('--rsh', help='remote-shell commands the fake PC sends, as "command@seconds;command@seconds"')
     ap.add_argument('--update-image', default=os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'Image'), help='the Image the fake PC serves at /Image (default: the newest build)')
     ap.add_argument('--ec', choices=['on', 'off'], default='on', help='scenario: the EC answers, or stays silent')
     ap.add_argument('--firmware', default=os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'fw', 'sd8897_uapsta.bin'),

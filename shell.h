@@ -106,6 +106,7 @@ static void shell(void) {
     static char buf[128];
     u32 n = 0;
     con_top = 1; if (con_row < 1) con_row = 1; bar_dirty = 1;                // row 0 is the status bar from now on
+    rsh_init();                                                              // commands typed on the PC (wsh.bat) arrive here too
     con_fg = 0x40E0FF; outs("\n  ~~~~  "); con_fg = C_TEXT; outs(VERSION); con_fg = 0x40E0FF; outs("  ~~~~\n"); con_fg = 0x808090;
     outs("  type help   c = wifichan   f = wififind   r = repeat\n\n"); con_fg = C_TEXT;
     if (pmk_handoff) { pmk_handoff = 0; static char first[8] = "k"; con_fg = 0x40E0FF; outs("wave"); con_fg = 0x60FF80; outs("> "); con_fg = C_TEXT; outs("k\n"); run_cmd(first); }   // after an update: reconnect on our own
@@ -117,6 +118,16 @@ static void shell(void) {
             while ((c = input_poll()) < 0) {
                 if (con_cleared) { con_cleared = 0; bar_dirty = 1; }
                 bar_tick(0);
+                if (rsh_pending) {                                      // a command typed on the PC: run it like a typed one
+                    rsh_pending = 0;
+                    static char rb[128]; u32 q = 0; while (rsh_cmd[q] && q < 127) { rb[q] = rsh_cmd[q]; q++; } rb[q] = 0;
+                    glyph(con_col, con_row, ' ');
+                    con_fg = 0x808090; outs(n ? "\n(from the PC) " : "(from the PC) "); con_fg = C_TEXT; outs(rb); out('\n');
+                    run_cmd(rb);
+                    con_fg = 0x40E0FF; outs("wave"); con_fg = 0x60FF80; outs("> "); con_fg = C_TEXT;
+                    for (u32 q2 = 0; q2 < n; q2++) out(buf[q2]);
+                    glyph(con_col, con_row, '_');
+                }
                 if (wifi_service()) {                                   // the network printed something: show the prompt and what was typed again
                     con_fg = 0x40E0FF; outs("wave"); con_fg = 0x60FF80; outs("> "); con_fg = C_TEXT;
                     for (u32 q = 0; q < n; q++) out(buf[q]);

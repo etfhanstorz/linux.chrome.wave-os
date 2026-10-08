@@ -77,6 +77,7 @@ static void fill(const struct fb *f, u32 rgb) {
 #include "ec.h"
 #include "wpa.h"
 #include "bar.h"
+#include "rsh.h"
 #include "web.h"
 #include "shell.h"
 #ifdef QEMU
