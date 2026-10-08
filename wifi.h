@@ -334,6 +334,7 @@ static int sdio_read_port1(u32 addr, u8 *out, u32 blocks) {
 // single-block reads always work). The port is a FIFO, so read a packet one 256-byte block at a time instead.
 static u32 rd_total;                     // bytes of the current packet that arrived before a failure
 static u32 mb_err, mb_got, mb_hw, mb_fail;   // last failed multi-block read: controller error, bytes that arrived, hardware timeout?
+static int wifi_verbose;                 // 1 = also print the long scan diagnostics (command: wifiv)
 static int wifi_read_bytes = 1;          // 1 = read a packet in BYTE mode (up to 512 bytes per transfer; clean on hana), 0 = as 256-byte blocks (garbled results on hana)
 static u32 dbg_starts[8], dbg_blocks, dbg_taken;   // first 4 bytes of each 256-byte block of the first big packet (scan diagnostics)
 
@@ -815,12 +816,13 @@ static int wifi_scan(int with5) {
     }
     wifi_event_hook = 0;
     if (!scan_events && !nap) return 0;                              // nothing at all: the error above says why
-    if (raw_taken) { puts("first record: block length "); put_dec(raw_len); puts(", bytes:"); for (u32 q = 0; q < 40; q++) { puts(" "); putc("0123456789abcdef"[raw_rec[q] >> 4]); putc("0123456789abcdef"[raw_rec[q] & 15]); } putc('\n'); }
-    if (dbg_taken) { puts("first big packet, block starts:"); for (u32 b = 0; b < dbg_blocks; b++) { putc(' '); put_hex(dbg_starts[b]); } putc('\n'); }
-    for (u32 i = 0; i < ev_log; i++) { puts("  event "); put_dec(i + 1); puts(": "); put_dec(ev_sets[i]); puts(" networks, more "); put_dec(ev_more[i]); puts(", size "); put_dec(ev_size[i]); puts("/"); put_dec(ev_len[i]); puts(", stop "); put_dec(ev_stop[i]); puts(" at block "); put_hex(ev_stype[i]); puts(" len "); put_dec(ev_slen[i]); puts(" left "); put_dec(ev_sleft[i]); putc('\n'); }
-    puts("scan records seen: "); put_dec(recs_seen); putc('\n');
-    if (mb_fail) { puts("multi-block reads failed "); put_dec(mb_fail); puts("x; last: controller error "); put_dec(mb_err); puts(", "); put_dec(mb_got); puts(" bytes arrived, "); puts(mb_hw ? "controller timeout" : "our 0.5 s timeout"); putc('\n'); }
-    puts("scan events received: "); put_dec(scan_events); puts(" ("); put_dec(scan_bytes); puts(" bytes)\n");
+    if (wifi_verbose && raw_taken) { puts("first record: block length "); put_dec(raw_len); puts(", bytes:"); for (u32 q = 0; q < 40; q++) { puts(" "); putc("0123456789abcdef"[raw_rec[q] >> 4]); putc("0123456789abcdef"[raw_rec[q] & 15]); } putc('\n'); }
+    if (wifi_verbose && dbg_taken) { puts("first big packet, block starts:"); for (u32 b = 0; b < dbg_blocks; b++) { putc(' '); put_hex(dbg_starts[b]); } putc('\n'); }
+    puts("events (nets more size stop type len left):\n");
+    for (u32 i = 0; i < ev_log; i++) { put_dec(i + 1); puts(": "); put_dec(ev_sets[i]); putc(' '); put_dec(ev_more[i]); putc(' '); put_dec(ev_len[i]); putc(' '); put_dec(ev_stop[i]); putc(' '); put_dec(ev_stype[i] == 0xffff ? 0 : ev_stype[i] & 0xfff); putc(' '); put_dec(ev_slen[i]); putc(' '); put_dec(ev_sleft[i]); putc('\n'); }
+    puts("recs "); put_dec(recs_seen); puts("  events "); put_dec(scan_events); putc('\n');
+    if (mb_fail) { puts("mb: "); put_dec(mb_fail); puts("x err"); put_dec(mb_err); puts(" got"); put_dec(mb_got); puts(mb_hw ? " hw" : " sw"); putc('\n'); }
+
     if (!scan_events) errs("WIFI", 14, 3, "the scan finished but the firmware sent no scan results");
     u32 hidden = 0;
     for (u32 i = 0; i < nap; i++) if (!aps[i].ssid[0]) hidden++;
