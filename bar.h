@@ -3,8 +3,8 @@
 //   Battery: the Chrome EC's battery figures (EC_CMD_READ_MEMMAP).
 // The shell keeps the row for itself (console.h con_top = 1); the browser draws the right half of it into its own title bar.
 
-#define TZ_OFFSET (-7 * 3600)                                  // MST = UTC-7 (no daylight saving)
-#define TZ_NAME "MST"
+// Mountain time: MST = UTC-7, and MDT = UTC-6 from the second Sunday in March (2:00) to the first Sunday in November (2:00), US rules.
+// (v1.6-002 used MST all year and was an hour off in summer.)
 
 static u32 time_src;                                           // 0 = unknown, 1 = clock chip, 2 = internet
 static long long time_base;                                    // unix seconds at time_tick
@@ -19,6 +19,18 @@ static long long days_from_civil(int y, int m, int d) {          // Howard Hinna
     int doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
     int doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     return era * 146097 + doe - 719468;
+}
+static void civil_from_days(long long z, int *y, int *m, int *d);
+static long long nth_sunday(int y, int m, int nth) {                 // day number of the nth Sunday of a month
+    long long d1 = days_from_civil(y, m, 1);
+    int wd = (int)(((d1 + 4) % 7 + 7) % 7);                           // 0 = Sunday (1970-01-01 was a Thursday)
+    return d1 + (7 - wd) % 7 + 7 * (nth - 1);
+}
+static int tz_dst(long long utc) {
+    int y, m, d; civil_from_days(utc / 86400, &y, &m, &d);
+    long long start = nth_sunday(y, 3, 2) * 86400 + 9 * 3600;         // 2:00 MST = 09:00 UTC
+    long long end = nth_sunday(y, 11, 1) * 86400 + 8 * 3600;          // 2:00 MDT = 08:00 UTC
+    return utc >= start && utc < end;
 }
 static void civil_from_days(long long z, int *y, int *m, int *d) {
     z += 719468;
@@ -99,13 +111,14 @@ static void bar_text(char *b) {
     u32 n = 0;
     long long t = now_unix();
     if (t) {
-        long long lt = t + TZ_OFFSET, days = lt >= 0 ? lt / 86400 : (lt - 86399) / 86400;
+        int dst = tz_dst(t);
+        long long lt = t + (dst ? -6 : -7) * 3600, days = lt >= 0 ? lt / 86400 : (lt - 86399) / 86400;
         int y, m, d; civil_from_days(days, &y, &m, &d);
         u32 sod = (u32)(lt - days * 86400), hh = sod / 3600, mm = sod / 60 % 60;
         bar_append(b, &n, dn[(u32)((days % 7 + 7) % 7)]); bar_append(b, &n, " "); bar_append(b, &n, mn[m - 1]); bar_append(b, &n, " "); bar_num(b, &n, (u32)d, 1);
         bar_append(b, &n, " "); bar_num(b, &n, (u32)y, 4); bar_append(b, &n, "  ");
-        bar_num(b, &n, hh % 12 ? hh % 12 : 12, 1); bar_append(b, &n, ":"); bar_num(b, &n, mm, 2); bar_append(b, &n, hh < 12 ? " AM " : " PM "); bar_append(b, &n, TZ_NAME);
-    } else bar_append(b, &n, "--:-- " TZ_NAME);
+        bar_num(b, &n, hh % 12 ? hh % 12 : 12, 1); bar_append(b, &n, ":"); bar_num(b, &n, mm, 2); bar_append(b, &n, hh < 12 ? " AM " : " PM "); bar_append(b, &n, dst ? "MDT" : "MST");
+    } else bar_append(b, &n, "--:--");
     bar_append(b, &n, "  \x01 ");                               // \x01 = where the Wi-Fi symbol goes
     if (bat_pct >= 0) { bar_num(b, &n, (u32)bat_pct, 1); bar_append(b, &n, bat_charging ? "%+" : "%"); } else bar_append(b, &n, "--%");
     bar_append(b, &n, "  v" WAVE_VERSION WAVE_PATCH " ");
