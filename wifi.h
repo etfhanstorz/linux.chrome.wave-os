@@ -721,7 +721,8 @@ static int wifi_init(void) {
 // Extended scan (what Linux uses on this chip): command 0x0107 = {u32 reserved, TLVs}. The command's answer carries
 // no results; they come as events (id 0x58) holding, per access point, a BSS_SCAN_RSP TLV {bssid, frame body} and a
 // BSS_SCAN_INFO TLV {rssi, ..., channel}.
-struct ap { u8 bssid[6]; char ssid[33]; u8 chan, sec; int rssi; u8 ich, rad; };   // ich/rad: channel and band as the firmware reported them (scan info block)
+struct ap { u8 bssid[6]; char ssid[33]; u8 chan, sec; int rssi; u8 ich, rad;   // ich/rad: channel and band as the firmware reported them (scan info block)
+            u16 cap, bint; u8 nrates, rates[16], rsn_len, rsn[50]; };           // what joining needs from the beacon: capabilities, beacon interval, supported rates, the RSN (WPA2) element
 static struct ap aps[32];
 static u32 nap, scan_events, scan_done, scan_bytes;
 
@@ -748,15 +749,17 @@ static void scan_event(const u8 *ev, u32 len) {
             if (cur) {
                 for (u32 m = 0; m < 6; m++) cur->bssid[m] = t[4 + m];
                 cur->ssid[0] = 0; cur->chan = 0; cur->sec = 0; cur->rssi = 0; cur->ich = 0; cur->rad = 0xff;
-                u32 cap = get16(t + 4 + 6 + 10);
+                cur->nrates = 0; cur->rsn_len = 0; cur->bint = (u16)get16(t + 4 + 6 + 8);
+                u32 cap = get16(t + 4 + 6 + 10); cur->cap = (u16)cap;
                 const u8 *ie = t + 4 + 6 + 12, *end = t + 4 + tl;
                 u32 ht_chan = 0;
                 while (ie + 2 <= end && ie + 2 + ie[1] <= end) {
                     u32 id = ie[0], l = ie[1];
                     if (id == 0) { u32 q; for (q = 0; q < l && q < 32; q++) cur->ssid[q] = ie[2 + q] >= 32 && ie[2 + q] < 127 ? ie[2 + q] : '?'; cur->ssid[q] = 0; }
                     else if (id == 3 && l >= 1) cur->chan = ie[2];
+                    else if (id == 1 || id == 50) { for (u32 q = 0; q < l; q++) if (cur->nrates < 16) cur->rates[cur->nrates++] = ie[2 + q]; }   // supported + extended rates
                     else if (id == 61 && l >= 1) ht_chan = ie[2];                // HT operation: primary channel (5 GHz beacons have no DS parameter element)
-                    else if (id == 48) cur->sec = 2;
+                    else if (id == 48) { cur->sec = 2; if (l + 2 <= sizeof cur->rsn) { for (u32 q = 0; q < l + 2; q++) cur->rsn[q] = ie[q]; cur->rsn_len = (u8)(l + 2); } }   // keep the whole RSN element for joining
                     else if (id == 221 && l >= 4 && ie[2] == 0x00 && ie[3] == 0x50 && ie[4] == 0xf2 && ie[5] == 1 && cur->sec < 1) cur->sec = 1;
                     ie += 2 + l;
                 }

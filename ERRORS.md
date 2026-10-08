@@ -71,6 +71,12 @@ the EC sent back (`EC_RES_*` in Linux `cros_ec_commands.h`).
 | **6.13.1** | The Wi-Fi firmware rejected a command (an error number is printed above) | || **6.14.1** | The scan answer was too short | |
 | **6.14.2** | A scan record in the answer was malformed | |
 | **6.14.3** | The scan finished but the firmware sent no scan result events | |
+| **6.15.1** | The router refused the connection (the association status number is in the summary) | |
+| **6.15.2** | The network has no WPA2 (RSN) element | |
+| **6.15.3** | The network does not offer CCMP encryption | |
+| **6.15.4** | The network does not offer a WPA2 password (PSK) login | |
+| **6.15.5** | The network requires protected management frames (not supported yet) | |
+| **6.15.6** | The network was not found, so there was nothing to join | |
 
 ## 7 Network and update
 

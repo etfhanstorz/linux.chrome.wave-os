@@ -55,6 +55,7 @@ static char cmd_codes[48]; static u32 cmd_codes_n;
 static void sum_reset(void) { sum_n = 0; sum_res[0] = 0; cmd_codes_n = 0; cmd_codes[0] = 0; }
 static void sum_c(char c) { if (sum_n < sizeof sum_res - 1) { sum_res[sum_n++] = c; sum_res[sum_n] = 0; } }
 static void sum_s(const char *s) { while (*s) sum_c(*s++); }
+static void sum_u(u32 v) { char t[12]; u32 k = 0; do { t[k++] = '0' + v % 10; v /= 10; } while (v); while (k) sum_c(t[--k]); }
 // Run-length form of a result string: 111111111111 -> 1x12, aaaaFFaFFFFF -> ax4.Fx2.a.Fx5
 static void sum_rle(const char *s) {
     u32 i = 0, first = 1;

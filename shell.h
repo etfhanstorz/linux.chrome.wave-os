@@ -27,6 +27,7 @@ static void run_cmd(char *line) {
     if (!*line) return;
     static char al_arg[24];                                            // short aliases for the long test commands: c = wifichan 157 HomeWifi, f = wififind HomeWifi
     if (streq(line, "c")) { line = "wifichan"; const char *a = "157 HomeWifi"; u32 q = 0; while ((al_arg[q] = a[q])) q++; arg = al_arg; }
+    else if (streq(line, "j")) { line = "wifijoin"; const char *a = "HomeWifi"; u32 q = 0; while ((al_arg[q] = a[q])) q++; arg = al_arg; }
     else if (streq(line, "f")) { line = "wififind"; const char *a = "HomeWifi"; u32 q = 0; while ((al_arg[q] = a[q])) q++; arg = al_arg; }
     char name[16]; { u32 q = 0; while (line[q] && q < 15) { name[q] = line[q]; q++; } name[q] = 0; }
     if (!streq(name, "prof")) prof_reset();
@@ -45,7 +46,7 @@ static void run_cmd(char *line) {
     }
 }
 static void run_cmd2(char *line, char *arg) {
-    if (streq(line, "help")) outs("commands: c f r opt prof wifi5 help version info echo color clear errors wifi wifion wififw wifiinit netdemo update wifichan wififind wifitry wifiv wifigap wifidiv wifiscan wifiscanm wifiscanblk wifiscan5 cryptotest reboot\n");
+    if (streq(line, "help")) outs("commands: c f j r opt prof wifi5 wifijoin help version info echo color clear errors wifi wifion wififw wifiinit netdemo update wifichan wififind wifitry wifiv wifigap wifidiv wifiscan wifiscanm wifiscanblk wifiscan5 cryptotest reboot\n");
     else if (streq(line, "version")) outs(VERSION "\n");
     else if (streq(line, "info")) cmd_info();
     else if (streq(line, "echo")) { outs(arg); out('\n'); }
@@ -62,6 +63,7 @@ static void run_cmd2(char *line, char *arg) {
     else if (streq(line, "update")) wave_update(arg);
     else if (streq(line, "wifichan")) wifi_chan(arg);
     else if (streq(line, "wifi5")) wifi_5g(arg);
+    else if (streq(line, "wifijoin")) wifi_join(*arg ? arg : "HomeWifi");
     else if (streq(line, "opt")) { if (*arg >= '0' && *arg <= '9') opt_toggle(*arg - '0'); opt_list(); }
     else if (streq(line, "prof")) {
         outs("P "); u64 tot = 0;
