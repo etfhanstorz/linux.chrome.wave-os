@@ -80,6 +80,7 @@ static int pmic_write(u32 adr, u32 val) {
 #define RSP_R1B  7
 
 static u32 msdc_rd(u32 off) { return rd32(MSDC3_BASE + off); }
+#define RAWR(off) (*(volatile u32 *)(MSDC3_BASE + (off)))     // bare register read: no fault-flag store, no barrier (the RX FIFO overruns if the drain loop is slow)
 static void msdc_wr(u32 off, u32 v) { *(volatile u32 *)(MSDC3_BASE + off) = v; }
 
 static void msdc_init_slow(void) {
@@ -334,7 +335,8 @@ static int sdio_read_port1(u32 addr, u8 *out, u32 blocks) {
 // single-block reads always work). The port is a FIFO, so read a packet one 256-byte block at a time instead.
 static u32 rd_total;                     // bytes of the current packet that arrived before a failure
 static u32 mb_err, mb_got, mb_hw, mb_fail;   // last failed multi-block read: controller error, bytes that arrived, hardware timeout?
-static u32 rd_gap_us = 1000;             // pause between pieces of one packet (see sdio_read_port)
+static u32 rd_div;                       // 0 = leave the bus clock alone for big reads, else the clock divider to use (wifidiv cycles it)
+static u32 rd_gap_us = 0;             // pause between pieces of one packet (see sdio_read_port)
 static int wifi_verbose;                 // 1 = also print the long scan diagnostics (command: wifiv)
 static int wifi_read_bytes = 1;          // 1 = read a packet in BYTE mode (up to 512 bytes per transfer; clean on hana), 0 = as 256-byte blocks (garbled results on hana)
 static u32 dbg_starts[8], dbg_blocks, dbg_taken;   // first 4 bytes of each 256-byte block of the first big packet (scan diagnostics)
@@ -354,13 +356,13 @@ static int sdio_read_bytes_once(u32 addr, u8 *out, u32 len) {
     u32 st = 0;
     u64 hz = tick_hz(), t0 = ticks();
     for (;;) {
-        u32 cnt = msdc_rd(MSDC_FIFOCS) & 0xff;
+        u32 cnt = RAWR(MSDC_FIFOCS) & 0xff;
         while (cnt >= 4 && got < len) {
-            u32 w = msdc_rd(MSDC_RXDATA);
+            u32 w = RAWR(MSDC_RXDATA);
             out[got] = w; out[got + 1] = w >> 8; out[got + 2] = w >> 16; out[got + 3] = w >> 24;
             got += 4; cnt -= 4;
         }
-        st = msdc_rd(MSDC_INT);
+        st = RAWR(MSDC_INT);
         if (st & (INT_CMDTMO | INT_RSPCRC | INT_DATTMO | INT_DATCRC)) break;
         if ((st & INT_XFER_COMPL) && got >= len) break;
         if (hz && ticks() - t0 > hz / 2) { st |= INT_DATTMO; break; }
@@ -378,6 +380,8 @@ static int sdio_read_port(u32 addr, u8 *out, u32 blocks) {
     if (wifi_read_bytes) {
         u32 len = blocks * 256;
         int fail = 0;
+        u32 save_div = (msdc_rd(MSDC_CFG) >> 8) & 0xff;
+        if (rd_div && len > 256) msdc_set_clock(rd_div);
         for (u32 off = 0; off < len && !fail; off += 512) {                  // v1.33 chunking: 512 bytes per transfer (best result so far: 5 of 16 records)
             u32 n = len - off < 512 ? len - off : 512;
             int e = sdio_read_bytes_once(addr, out + off, n);
@@ -385,6 +389,7 @@ static int sdio_read_port(u32 addr, u8 *out, u32 blocks) {
             rd_total += n;
             if (off + n < len) delay_us(rd_gap_us);                          // v1.36 on hana: bytes after the first 1024 of a packet were garbage; give the chip time between pieces
         }
+        if (rd_div && len > 256) msdc_set_clock(save_div);
         if (fail) return fail;
     } else if (wifi_read_bytes == 2) {                                         // EXPERIMENT: the whole packet in ONE multi-block transfer
         int e = sdio_read_port1(addr, out, blocks);
