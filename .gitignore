@@ -22,3 +22,4 @@ releases/wave-os-v[2-9].*.kpart
 update_key.txt
 update_key.h
 wave-log.txt
+pc_addr.h

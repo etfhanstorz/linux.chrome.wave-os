@@ -84,6 +84,7 @@ class FakeFirmwareLoader:
         self.data_q = {}                 # data ports 0..31: port -> SDIO packet waiting for the host (rx descriptor + frame)
         self.data_ptr = 0                # next data port the chip fills (rolling, like Linux curr_rd_port)
         self.partial = {}                # data port -> bytes not yet read (byte-mode reads come in 512-byte pieces)
+        self.pending = []                # received packets waiting for a free data port (the real chip's flow control)
         self.assoc = None                # set when the host associated: (bssid, ssid)
         self.lan = None                  # the fake LAN behind the router (set by fakehana.py)
         self.ap = None                   # the fake WPA2 router (made on first use)
@@ -111,7 +112,7 @@ class FakeFirmwareLoader:
         self.pos = 0; self.i = 0; self.acked = False
         self.cfg = {0xcd: 0, 0xb8: 0, 0xb9: 0, 0x01: 0, 0xcc: 0}
         self.mask = 0; self.int_status = 0; self.cmd_resp = b''; self.queue = []
-        self.data_q = {}; self.data_ptr = 0; self.partial = {}; self.assoc = None; self.keys_set = []
+        self.data_q = {}; self.data_ptr = 0; self.partial = {}; self.assoc = None; self.keys_set = []; self.pending = []
         self.ap = None
         self.cold_boots = getattr(self, 'cold_boots', 0) + 1
 
@@ -120,9 +121,13 @@ class FakeFirmwareLoader:
         frame = dst + src + struct.pack('>H', 8 + len(payload)) + bytes([0xaa, 0xaa, 0x03, 0, 0, 0]) + struct.pack('>H', ethertype) + payload
         rxpd = struct.pack('<BBHHH', 0, 0, len(frame), 20, 0).ljust(20, b'\0')       # bss type/num, frame length, offset of the frame from the descriptor, type
         pkt = struct.pack('<HH', 4 + len(rxpd) + len(frame), 0) + rxpd + frame
-        port = self.data_ptr
-        self.data_ptr = (self.data_ptr + 1) % 32
-        self.data_q[port] = pkt
+        self.pending.append(pkt)
+        self.fill_ports()
+
+    def fill_ports(self):
+        while self.pending and self.data_ptr not in self.data_q and self.data_ptr not in self.partial:
+            self.data_q[self.data_ptr] = self.pending.pop(0)
+            self.data_ptr = (self.data_ptr + 1) % 32
 
     def host_command(self, d):
         import struct
@@ -263,6 +268,7 @@ class FakeFirmwareLoader:
         if r == 0x02:
             return self.mask
         if 0x04 <= r <= 0x07:                            # upload (receive) bitmap: bit p = data port p has a packet
+            self.fill_ports()
             bm = sum(1 << pt for pt in self.data_q)
             return (bm >> (8 * (r - 0x04))) & 0xff
         if 0x08 <= r <= 0x0b:                            # download bitmap: every data port may be written

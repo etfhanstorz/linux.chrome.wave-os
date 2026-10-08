@@ -9,6 +9,15 @@ python3 - <<'EOF'
 k = open('update_key.txt').read().strip()
 open('update_key.h', 'w').write('static const unsigned char update_key[16] = {%s};\n' % ', '.join('0x' + k[i:i+2] for i in range(0, 32, 2)))
 EOF
+# This PC's address (the Chromebook's `up` command fetches updates from it). Detected on every build; 0.0.0.0 if it cannot be found.
+PCIP=$(powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(wslpath -w tools/pcaddr.ps1)" 2>/dev/null | tr -d '\r' | head -1)
+python3 - "$PCIP" <<'EOF'
+import sys
+p = sys.argv[1].split('.')
+ok = len(p) == 4 and all(x.isdigit() and int(x) < 256 for x in p)
+v = (int(p[0]) << 24 | int(p[1]) << 16 | int(p[2]) << 8 | int(p[3])) if ok else 0
+open('pc_addr.h', 'w').write('#define PC_ADDR_DEFAULT 0x%08xu   /* %s */\n' % (v, sys.argv[1] if ok else 'unknown'))
+EOF
 ${X}gcc -c -O2 -ffreestanding -fpie -mgeneral-regs-only -mstrict-align -nostdlib main.c -o main.o
 [ -f fw/sd8897_uapsta.bin ] || sh fetch_fw.sh
 ${X}gcc -c fw.S -o fw.o

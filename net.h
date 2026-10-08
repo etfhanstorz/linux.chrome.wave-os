@@ -74,6 +74,28 @@ static void arp_reply(const u8 *rx) {
 }
 
 static void tcp_input(const u8 *src_mac, u32 src_ip, const u8 *seg, u32 len);
+
+// ---- receive checks (v1.53.2): every IP header, TCP segment, UDP datagram and ping is checked against its checksum; damaged ones are dropped
+// (TCP then asks the sender again). The Wi-Fi chip's read path can damage big packets, and a download must never use them. ----
+static u32 net_bad_ip, net_bad_l4, net_good_frames;
+static u32 rxtest_on;                                          // rxtest: keep and measure damaged pings instead of dropping them
+#define RXT_MAX 8
+static struct { u32 len, ok, bad, first_min, nbad_max; } rxt[RXT_MAX]; static u32 rxt_n, rxt_bad_ip;
+static u32 l4_ok(u32 proto, u32 src, u32 dst, const u8 *p, u32 plen) {
+    u8 ph[12]; be32w(ph, src); be32w(ph + 4, dst); ph[8] = 0; ph[9] = (u8)proto; be16w(ph + 10, plen);
+    return csum(p, plen, csum(ph, 12, 0)) == 0xffff;
+}
+// Windows `ping -l N` fills the payload with abcdefghijklmnopqrstuvw repeated: compare it, report the first wrong offset and how many bytes are wrong
+static void rxtest_note(const u8 *echo, u32 plen, u32 ip_good) {
+    u32 n = plen - 8, first = 0xffffffff, nbad = 0;
+    for (u32 i = 0; i < n; i++) if (echo[8 + i] != 'a' + i % 23) { if (first == 0xffffffff) first = i; nbad++; }
+    u32 k = 0; while (k < rxt_n && rxt[k].len != n) k++;
+    if (k == rxt_n) { if (rxt_n == RXT_MAX) return; rxt[k].len = n; rxt[k].ok = rxt[k].bad = 0; rxt[k].first_min = 0xffffffff; rxt[k].nbad_max = 0; rxt_n++; }
+    if (!ip_good) rxt_bad_ip++;
+    if (nbad || csum(echo, plen, 0) != 0xffff) { rxt[k].bad++; if (first < rxt[k].first_min) rxt[k].first_min = first; if (nbad > rxt[k].nbad_max) rxt[k].nbad_max = nbad; }
+    else rxt[k].ok++;
+}
+
 static void net_handle(const u8 *f, u32 len) {
     if (len < 14) return;
     u32 type = be16r(f + 12);
@@ -87,17 +109,24 @@ static void net_handle(const u8 *f, u32 len) {
     u32 ihl = (f[14] & 15) * 4, proto = f[23], src = be32r(f + 26), dst = be32r(f + 30);
     const u8 *p = f + 14 + ihl; u32 plen = be16r(f + 16) - ihl;
     if (14 + ihl + plen > len) return;
+    u32 ip_good = csum(f + 14, ihl, 0) == 0xffff;
+    if (!ip_good && !rxtest_on) { net_bad_ip++; return; }                                    // damaged header: drop
     if (proto == 1 && plen >= 8) {                                                          // ICMP
+        if (rxtest_on && p[0] == 8) { rxtest_note(p, plen, ip_good); if (!ip_good) return; }
+        else if (csum(p, plen, 0) != 0xffff) { net_bad_l4++; return; }
         if (p[0] == 8 && dst == net_ip) {                                                   // echo request: answer it
             static u8 r[1480];
             mcopy(r, p, plen); r[0] = 0; be16w(r + 2, 0); be16w(r + 2, ~csum(r, plen, 0) & 0xffff);
             ip_send(f + 6, net_ip, src, 1, r, plen);
         } else if (p[0] == 0) { icmp_reply_seen = 1; icmp_reply_id = be16r(p + 4); icmp_reply_seq = be16r(p + 6); icmp_reply_ttl = f[22]; }
     } else if (proto == 6 && plen >= 20) {                                                  // TCP
+        if (!l4_ok(6, src, dst, p, plen)) { net_bad_l4++; return; }                         // damaged segment: drop it, the sender will resend
+        net_good_frames++;
         tcp_input(f + 6, src, p, plen);
     } else if (proto == 17 && plen >= 8) {                                                  // UDP
         u32 sport = be16r(p), dport = be16r(p + 2), ulen = be16r(p + 4);
         if (ulen < 8 || ulen > plen) return;
+        if ((p[6] | p[7]) && !l4_ok(17, src, dst, p, ulen)) { net_bad_l4++; return; }             // checksum 0 = none (legal over IPv4)
         if (dport == 68 && ulen - 8 <= sizeof dhcp_in) { mcopy(dhcp_in, p + 8, ulen - 8); dhcp_in_len = ulen - 8; dhcp_in_got = 1; }
         else if (udp_listen_port && dport == udp_listen_port && ulen - 8 <= sizeof udp_in) {
             mcopy(udp_in, p + 8, ulen - 8); udp_in_len = ulen - 8; udp_in_port = sport; udp_in_src = src; udp_in_got = 1;

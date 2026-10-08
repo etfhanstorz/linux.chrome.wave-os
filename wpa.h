@@ -216,3 +216,22 @@ static int wifi_ping(const char *arg) {
     sum_s("reply "); sum_u(ms); sum_s(" ms");
     return 1;
 }
+
+// rxtest: for 40 s, measure pings sent to us. On the PC:  ping -n 10 -l 1400 <this address>   (try other -l sizes: 200, 800, 1200, 1472)
+static int wifi_rxtest(void) {
+    if (!net_ip) { errs("NET", 1, 1, "not connected: run k (wificonnect) first"); sum_s("not connected"); return 0; }
+    rxt_n = 0; rxt_bad_ip = 0; net_bad_ip = net_bad_l4 = 0; rxtest_on = 1;
+    puts("rxtest: on the PC run  ping -n 10 -l 1400 "); put_ip(net_ip); puts("   (listening 40 s)\n");
+    u64 hz = tick_hz(), t0 = ticks();
+    while (hz && ticks() - t0 < hz * 40) { net_poll(); wdt_kick(); }
+    rxtest_on = 0;
+    u32 tot_ok = 0, tot_bad = 0;
+    for (u32 k = 0; k < rxt_n; k++) {
+        puts("  size "); put_dec(rxt[k].len); puts(": ok "); put_dec(rxt[k].ok); puts(" bad "); put_dec(rxt[k].bad);
+        if (rxt[k].bad) { puts("  first wrong byte at "); put_dec(rxt[k].first_min); puts(", up to "); put_dec(rxt[k].nbad_max); puts(" bytes wrong"); }
+        putc('\n'); tot_ok += rxt[k].ok; tot_bad += rxt[k].bad;
+    }
+    sum_s("ok "); sum_u(tot_ok); sum_s(" bad "); sum_u(tot_bad);
+    if (rxt_bad_ip) { sum_s(" iphdr-bad "); sum_u(rxt_bad_ip); }
+    return 1;
+}
