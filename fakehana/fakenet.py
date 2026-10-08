@@ -32,7 +32,7 @@ class FakeNet:
         self.routes = {}            # HTTP server on the fake PC (port 8000): path -> bytes
         self.conns = {}             # guest port -> server state
         self.http_log = []
-        self.dns_names = {'example.test': PC_IP, 'site.test': PC_IP, 'example.com': PC_IP, 'pool.ntp.org': PC_IP}   # the router's DNS: these names exist, everything else does not
+        self.dns_names = {'example.test': PC_IP, 'site.test': PC_IP, 'example.com': PC_IP, 'pool.ntp.org': PC_IP, 'secure.test': PC_IP}   # the router's DNS: these names exist, everything else does not
         self.web = {}                                # port 80 on the fake PC: path -> (status, extra headers, body)
 
     # ---- MMIO ----
@@ -93,6 +93,12 @@ class FakeNet:
             if dport == 7:
                 u = struct.pack('>HHHH', 7, sport, 8 + len(data), 0) + data
                 self.send(self.ip_packet(dstip, srcip, 17, u, src, GW_MAC if dstip == GW_IP else PC_MAC)); return
+        if proto == 6 and dstip == PC_IP and len(p) >= 20 and struct.unpack('>H', p[2:4])[0] == 443:      # HTTPS: a real TLS server (faketls.py)
+            if not getattr(self, 'tls', None):
+                import faketls
+                self.tls = faketls.FakeTLS(self)
+            self.guest_mac = src
+            return self.tls.segment(src, p)
         if proto == 6 and dstip == PC_IP and len(p) >= 20 and struct.unpack('>H', p[2:4])[0] == 80:
             return self.tcp_server(src, p, port=80)
         if proto == 6 and dstip == PC_IP and len(p) >= 20:

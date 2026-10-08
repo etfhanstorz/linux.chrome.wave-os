@@ -198,6 +198,7 @@ static void web_plain(const u8 *h, u32 n) {                                     
 
 // ---- addresses ----
 static char web_url[300];                                    // the page being shown
+static u32 web_secure;                                       // the page came over https (encrypted; the certificate is not checked yet)
 struct url { char host[100]; u32 port, https; char path[200]; };
 static int url_parse(const char *s, struct url *u) {
     u32 i = 0;
@@ -269,11 +270,6 @@ static int web_fetch(const char *url_in) {
         struct url u;
         if (!url_parse(url, &u)) { errs("NET", 31, 1, "the address is not valid (it must start with http://)"); web_error_page("Bad address", "The address must start with http:// (for example http://example.com).", url); for (u32 i = 0; i < sizeof web_url - 1 && url[i]; i++) web_url[i] = url[i]; return 0; }
         for (u32 i = 0; i < sizeof web_url; i++) { web_url[i] = url[i]; if (!url[i]) break; } web_url[sizeof web_url - 1] = 0;
-        if (u.https) {
-            errs("NET", 31, 2, "this address needs HTTPS (encrypted web), which wave-os cannot do yet");
-            web_error_page("HTTPS is not supported yet", "This page needs an encrypted connection (https://). Wave-os cannot do that yet.", "Plain http:// pages work. HTTPS is the next big step.");
-            return 0;
-        }
         web_status("looking up the address...");
         u32 ip = 0; int r = dns_lookup(u.host, &ip);
         if (r) {
@@ -281,10 +277,19 @@ static int web_fetch(const char *url_in) {
             web_error_page(r == -2 ? "No such website" : r == -1 ? "Not connected" : "Cannot look up the name", r == -2 ? "That name does not exist." : r == -1 ? "Connect to Wi-Fi first (press q, then type k)." : "The DNS server did not answer.", u.host);
             return 0;
         }
-        web_status("loading...");
+        web_status(u.https ? "connecting securely..." : "loading...");
         http_any = 1; http_status = 0;
-        int n = http_get(ip, u.port, u.host, u.path, web_raw, WEB_RAW_MAX, 25000);
+        int n = u.https ? https_get(ip, u.port, u.host, u.path, web_raw, WEB_RAW_MAX, 25000) : http_get(ip, u.port, u.host, u.path, web_raw, WEB_RAW_MAX, 25000);
         http_any = 0;
+        web_secure = u.https;
+        if (n <= -20) {
+            static const char *why[] = {"", "The connection broke during setup.", "The website does not offer an encryption method wave-os knows yet (it needs X25519 + AES-GCM).", "The website did not answer the encryption setup in time.", "The website's answer failed its check: the connection may have been tampered with.", "Encrypted data arrived damaged."};
+            u32 w = (u32)(-20 - n); if (w > 5) w = 1;
+            errs("NET", 34, w, "the secure (https) connection could not be set up");
+            web_error_page("Secure connection failed", why[w], u.host);
+            if (tls.alert >= 0) { char a[40] = "the website said: alert "; u32 q = 24, v = (u32)tls.alert; char d[4]; u32 dc = 0; do { d[dc++] = (char)('0' + v % 10); v /= 10; } while (v); while (dc) a[q++] = d[--dc]; a[q] = 0; web_line(S_DIM, a); web_finish(); }
+            return 0;
+        }
         if (n < 0) {
             errs("NET", 32, (u32)(-n > 9 ? 9 : -n), "could not load the page");
             web_error_page("Could not load the page", n == -2 ? "Could not connect to the server." : n == -3 ? "The server took too long to answer." : "The server's answer was not understood.", u.host);
@@ -330,7 +335,8 @@ static void web_hints(void) {
 static void web_status(const char *msg) {
     u32 k = 0; while (msg[k] && k + 1 < sizeof web_msg) { web_msg[k] = msg[k]; k++; } web_msg[k] = 0;
     char b[200]; u32 n = 0; b[n++] = ' ';
-    for (u32 i = 0; web_url[i] && n < sizeof b - 30; i++) b[n++] = web_url[i];
+    for (u32 i = 0; web_url[i] && n < sizeof b - 60; i++) b[n++] = web_url[i];
+    if (web_secure) { const char *s = "  (encrypted, not verified)"; for (u32 i = 0; s[i] && n < sizeof b - 30; i++) b[n++] = s[i]; }
     if (web_msg[0]) { b[n++] = ' '; b[n++] = ' '; b[n++] = '-'; b[n++] = ' '; for (u32 i = 0; web_msg[i] && n < sizeof b - 1; i++) b[n++] = web_msg[i]; }
     b[n] = 0;
     web_row(1, b, 0xE0E6F0, 0x24364F, 0);
