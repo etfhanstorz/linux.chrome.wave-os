@@ -91,7 +91,7 @@ static void run_cmd2(char *line, char *arg) {
     else if (streq(line, "wifiscanm")) { wifi_read_bytes = 2; wifi_scan(0); }
     else if (streq(line, "wifiscanblk")) { wifi_read_bytes = 0; wifi_scan(0); }
     else if (streq(line, "wifiscan5")) { wifi_read_bytes = 1; wifi_scan(1); }
-    else if (streq(line, "cryptotest")) crypto_test();
+    else if (streq(line, "cryptotest")) { crypto_test(); tls_selftest(); }
     else if (streq(line, "reboot")) { outs("rebooting\n"); reboot(); }
     else if (streq(line, "color")) {
         if (streq(arg, "white")) con_fg = 0xFFFFFF;

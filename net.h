@@ -272,7 +272,7 @@ static int net_udp(u32 dst, u32 sport, u32 dport, const u8 *data, u32 len) {
 #define TCP_ESTAB 2
 #define TCP_DONE 3                                        // peer closed (FIN seen) or we got everything
 #define TCP_RESET 4
-static struct { u32 state, lport, rport, rip, snd_nxt, rcv_nxt; u8 *dst; u32 dstmax, got, overflow, segs; u8 rmac[6]; } tcp;
+static struct { u32 state, lport, rport, rip, snd_nxt, rcv_nxt, una; u8 *dst; u32 dstmax, got, overflow, segs; u8 rmac[6]; } tcp;
 
 static void (*net_idle_hook)(void);                       // called about every 2 s while a download waits (update.h shows progress and ships the log)
 static u32 tcp_mss = 1460;                                // largest TCP payload we ask the sender for; `mss N` changes it (v1.53.5 tried 320, but Windows never sends less than 536, and v1.53.7 reads whole packets anyway)
@@ -295,8 +295,9 @@ static void tcp_input(const u8 *src_mac, u32 src_ip, const u8 *seg, u32 len) {
     if (hl > len) return;
     const u8 *d = seg + hl; u32 dl = len - hl;
     if (fl & 4) { tcp.state = TCP_RESET; return; }
+    if ((fl & 16) && tcp.state != TCP_SYN_SENT && (int)(ack - tcp.una) > 0 && (int)(ack - tcp.snd_nxt) <= 0) tcp.una = ack;   // the peer has our data up to here
     if (tcp.state == TCP_SYN_SENT) {
-        if ((fl & 18) == 18 && ack == tcp.snd_nxt + 1) { tcp.snd_nxt++; tcp.rcv_nxt = seq + 1; tcp.state = TCP_ESTAB; tcp_send(16, 0, 0); }
+        if ((fl & 18) == 18 && ack == tcp.snd_nxt + 1) { tcp.snd_nxt++; tcp.una = tcp.snd_nxt; tcp.rcv_nxt = seq + 1; tcp.state = TCP_ESTAB; tcp_send(16, 0, 0); }
         return;
     }
     if (seq != tcp.rcv_nxt) { if (dl || (fl & 1)) tcp_send(16, 0, 0); return; }          // out of order: ask again for what we expect
@@ -343,6 +344,33 @@ static void http_parse_headers(const u8 *h, u32 n) {
         while (j < n && h[j] != '\r' && h[j] != '\n' && k + 1 < max) dst[k++] = (char)h[j++];
         dst[k] = 0;
     }
+}
+
+// Send a block of data (TLS records) and keep a copy until the peer acknowledges it; tcp_retransmit_check() sends it again after 1 s.
+static u8 tcp_hold[4096]; static u32 tcp_hold_seq, tcp_hold_len, tcp_hold_tries; static u64 tcp_hold_t;
+static int tcp_write(const u8 *d, u32 n) {
+    if (tcp.state != TCP_ESTAB) return -1;
+    if (tcp_hold_len && (int)(tcp.una - (tcp_hold_seq + tcp_hold_len)) < 0) {          // the previous block is still unacknowledged: add to it
+        if (tcp_hold_len + n > sizeof tcp_hold) return -1;
+        mcopy(tcp_hold + tcp_hold_len, d, n);
+    } else {
+        if (n > sizeof tcp_hold) return -1;
+        tcp_hold_seq = tcp.snd_nxt; tcp_hold_len = 0; mcopy(tcp_hold, d, n);
+    }
+    u32 start = tcp_hold_len; tcp_hold_len += n;
+    for (u32 off = 0; off < n; off += 1400) { u32 len = n - off < 1400 ? n - off : 1400; tcp_send(24, tcp_hold + start + off, len); tcp.snd_nxt += len; }
+    tcp_hold_t = ticks(); tcp_hold_tries = 0;
+    return 0;
+}
+static void tcp_retransmit_check(void) {
+    if (!tcp_hold_len || tcp.state != TCP_ESTAB) return;
+    if ((int)(tcp.una - (tcp_hold_seq + tcp_hold_len)) >= 0) { tcp_hold_len = 0; return; }   // all acknowledged
+    u64 hz = tick_hz();
+    if (!hz || ticks() - tcp_hold_t < hz || tcp_hold_tries >= 6) return;
+    u32 from = (int)(tcp.una - tcp_hold_seq) > 0 ? tcp.una - tcp_hold_seq : 0, save = tcp.snd_nxt;
+    tcp.snd_nxt = tcp_hold_seq + from;
+    for (u32 off = from; off < tcp_hold_len; off += 1400) { u32 len = tcp_hold_len - off < 1400 ? tcp_hold_len - off : 1400; tcp_send(24, tcp_hold + off, len); tcp.snd_nxt += len; }
+    tcp.snd_nxt = save; tcp_hold_t = ticks(); tcp_hold_tries++;
 }
 
 // HTTP/1.0 GET into dst (max bytes). Returns the body length, or a negative error:
