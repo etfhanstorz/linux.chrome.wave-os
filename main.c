@@ -59,6 +59,7 @@ static void fill(const struct fb *f, u32 rgb) {
     }
 }
 
+#include "libc.h"                                      // memset/memcpy/memmove/memcmp for the compiler
 #include "rlog.h"
 #include "console.h"
 #include "version.h"                                   // VERSION comes from here (change it with version.bat)
@@ -77,6 +78,7 @@ static void fill(const struct fb *f, u32 rgb) {
 #include "ec.h"
 #include "wpa.h"
 #include "bar.h"
+#include "tls.h"
 #include "rsh.h"
 #include "web.h"
 #include "shell.h"
