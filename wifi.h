@@ -777,14 +777,16 @@ static void wifi_poll_events(u32 ms) {
 
 static u32 scan_cmd_ms = 10000;            // wait for a scan command's answer this long (wififind uses less: failures are common on 5 GHz)
 static char scan_ssid[33]; static u32 scan_ssid_len;      // set by wififind: scan for this one name only
+static u32 sb_no_bssmode, sb_no_ssid, sb_no_rates, sb_no_gap, sb_passive, sb_min;   // scan command variants (wifichan tries them one by one)
 static int scan_band(u32 radio, const u8 *chans, u32 nch) {
     static u8 body[4 + 5 + 5 + 40 + 4 + 6 * 16 + 6 + 4 + 14];
     static const u8 rates24[] = {0x82, 0x84, 0x8b, 0x96, 0x0c, 0x12, 0x18, 0x24, 0x30, 0x48, 0x60, 0x6c};
     static const u8 rates5[] = {0x8c, 0x12, 0x98, 0x24, 0xb0, 0x48, 0x60, 0x6c};
     u32 p = 0;
     put16(body, 0); put16(body + 2, 0); p = 4;                      // u32 reserved
-    put16(body + p, 0x01ce); put16(body + p + 2, 1); body[p + 4] = 3; p += 5;            // BSS mode TLV: any
-    if (scan_ssid_len) {                                                                  // directed scan: only networks with exactly this name (max_ssid_length 0 + the name)
+    if (!sb_no_bssmode) { put16(body + p, 0x01ce); put16(body + p + 2, 1); body[p + 4] = 3; p += 5; }   // BSS mode TLV: any
+    if (sb_no_ssid) {                                                                     // variant: no SSID block at all
+    } else if (scan_ssid_len) {                                                           // directed scan: only networks with exactly this name (max_ssid_length 0 + the name)
         put16(body + p, 0x0112); put16(body + p + 2, 1 + scan_ssid_len); body[p + 4] = 0;
         for (u32 i = 0; i < scan_ssid_len; i++) body[p + 5 + i] = (u8)scan_ssid[i];
         p += 5 + scan_ssid_len;
@@ -795,12 +797,12 @@ static int scan_band(u32 radio, const u8 *chans, u32 nch) {
     for (u32 i = 0; i < nch; i++) {
         body[p] = radio; body[p + 1] = chans[i];
         body[p + 2] = (radio && chans[i] >= 52 && chans[i] <= 144) ? 0x13 : 0x02;          // DFS channels: passive + hidden-SSID report + no filter; others: active, no filter (Linux MWIFIEX_*_SCAN bits)
-        put16(body + p + 3, 0); put16(body + p + 5, 110); p += 6;
+        if (sb_passive) body[p + 2] |= 0x01;                                                // variant: listen only, no probe request
+        put16(body + p + 3, sb_min); put16(body + p + 5, 110); p += 6;
     }
     const u8 *rt = radio ? rates5 : rates24; u32 rn = radio ? sizeof rates5 : sizeof rates24;
-    put16(body + p, 0x0001); put16(body + p + 2, rn); p += 4;                            // supported rates TLV
-    for (u32 i = 0; i < rn; i++) body[p++] = rt[i];
-    put16(body + p, 0x01c5); put16(body + p + 2, 2); put16(body + p + 4, 50); p += 6;    // gap between channels: 50 TU
+    if (!sb_no_rates) { put16(body + p, 0x0001); put16(body + p + 2, rn); p += 4; for (u32 i = 0; i < rn; i++) body[p++] = rt[i]; }   // supported rates TLV
+    if (!sb_no_gap) { put16(body + p, 0x01c5); put16(body + p + 2, 2); put16(body + p + 4, 50); p += 6; }                          // gap between channels: 50 TU
     u8 r[8]; u32 n = 0;
     scan_done = 0;
     wifi_cmd_ms = scan_cmd_ms;                                      // the firmware answers only after the scan: Linux waits ~10 s
@@ -891,6 +893,40 @@ static int wifi_find(const char *name) {
     puts("FOUND "); puts(target.ssid); puts("  ch "); put_dec(target.chan); puts("  -"); put_dec((u64)(target.rssi < 0 ? -target.rssi : target.rssi)); puts(" dBm  ");
     puts(target.sec == 2 ? "WPA2" : target.sec == 1 ? "WPA" : target.sec == 3 ? "WEP?" : "open");
     puts("  "); put_mac(target.bssid); putc('\n');
+    return 1;
+}
+// ---- v1.45: wifichan CH [NAME] = scan ONE 5 GHz channel with several variants of the scan command, to find which one the chip answers ----
+static int wifi_chan(const char *arg) {
+    u32 ch = 0; u32 i = 0;
+    while (arg[i] >= '0' && arg[i] <= '9') ch = ch * 10 + (arg[i++] - '0');
+    while (arg[i] == ' ') i++;
+    if (!ch) { puts("usage: wifichan CHANNEL [NAME]   e.g. wifichan 157 HomeWifi\n"); return 0; }
+    u32 nl = 0; while (arg[i + nl] && nl < 32) { scan_ssid[nl] = arg[i + nl]; nl++; }
+    scan_ssid[nl] = 0;
+    if (!wifi_ready && !wifi_init()) return 0;
+    u8 r[8]; u32 n = 0; static const u8 macctl[6] = {0x13, 0x00, 0x00, 0x00, 0x00, 0x00};
+    wifi_cmd(0x0028, macctl, sizeof macctl, r, sizeof r, &n);
+    u8 c1 = (u8)ch; u32 radio = ch >= 36 ? 1 : 0;
+    static const char *names[] = {"as-is", "no-rates", "no-gap", "no-bssmode", "passive", "min40", "ssid-off", "bare"};
+    wifi_event_hook = scan_event;
+    puts("variant         | answer events recs found\n");
+    for (u32 v = 0; v < 8; v++) {
+        sb_no_bssmode = sb_no_ssid = sb_no_rates = sb_no_gap = sb_passive = sb_min = 0;
+        scan_ssid_len = (v == 6 || v == 7) ? 0 : nl;                        // 'ssid-off' and 'bare': wildcard scan
+        if (v == 1) sb_no_rates = 1; if (v == 2) sb_no_gap = 1; if (v == 3) sb_no_bssmode = 1; if (v == 4) sb_passive = 1; if (v == 5) sb_min = 40;
+        if (v == 6) sb_no_ssid = 1;
+        if (v == 7) { sb_no_ssid = sb_no_rates = sb_no_gap = sb_no_bssmode = 1; }
+        nap = 0; scan_events = 0; scan_bytes = 0; dbg_taken = 0; raw_taken = 0; ev_log = 0; recs_seen = 0; mb_fail = 0;
+        scan_cmd_ms = 3500; wdt_kick();
+        int ok = scan_band(radio, &c1, 1);
+        scan_cmd_ms = 10000;
+        u32 hit = 0; for (u32 k = 0; k < nap; k++) if (nl ? streq(aps[k].ssid, scan_ssid) : aps[k].chan == ch) hit = 1;
+        { u32 l = 0; puts(names[v]); while (names[v][l]) l++; for (; l < 15; l++) putc(' '); }
+        puts("| "); puts(ok ? "yes    " : "NO     "); put_dec(scan_events); puts("      "); put_dec(recs_seen); puts("    "); puts(hit ? "FOUND" : "-"); putc('\n');
+        if (hit) { for (u32 k = 0; k < nap; k++) { puts("   "); puts(aps[k].ssid[0] ? aps[k].ssid : "(hidden)"); puts(" ch "); put_dec(aps[k].chan); puts(" -"); put_dec((u64)(aps[k].rssi < 0 ? -aps[k].rssi : aps[k].rssi)); putc('\n'); } }
+    }
+    sb_no_bssmode = sb_no_ssid = sb_no_rates = sb_no_gap = sb_passive = sb_min = 0;
+    wifi_event_hook = 0; scan_ssid_len = 0;
     return 1;
 }
 // ---- v1.39: wifitry = scan with many read settings and print a scoreboard (looking for the setting that gets whole packets through) ----

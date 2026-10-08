@@ -136,7 +136,7 @@ class FakeFirmwareLoader:
             ok = bool(chans) and all(m & 2 for _, _, m in chans)       # the channel filter must be disabled
             allaps = [(b'HomeNet', '02:11:22:33:44:01', -52, 6, True), (b'CoffeeShop-Guest', '02:11:22:33:44:02', -71, 1, False),
                       (b'Neighbour5G', '02:11:22:33:44:03', -80, 149, True), (b'', '02:11:22:33:44:04', -85, 11, True),
-                      (b'HomeWifi', '02:11:22:33:44:05', -48, 6, True)]
+                      (b'HomeWifi', '02:11:22:33:44:55', -62, 157, True)]
 
             def mk(ssid, mac, rssi, ch, sec):
                 ies = bytes([0, len(ssid)]) + ssid + bytes([3, 1, ch]) + (bytes([48, 4, 1, 0, 0, 0]) if sec else b'')
@@ -146,7 +146,7 @@ class FakeFirmwareLoader:
                 info = struct.pack('<hhBBB', rssi, 0, 0, 0 if ch < 36 else 1, ch).ljust(18, b'\0')
                 t2 = struct.pack('<HH', 0x0157, len(info)) + info
                 return t1 + t2
-            mine = [a for a in allaps if ((a[3] >= 36) == (chans[0][0] == 1)) and (directed is None or a[0] == directed)] if ok else []
+            mine = [a for a in allaps if ((a[3] >= 36) == (chans[0][0] == 1)) and a[3] in [cc[1] for cc in chans] and (directed is None or a[0] == directed)] if ok else []
             for i in range(0, max(1, len(mine)), 2):
                 part = mine[i:i + 2]
                 tlvs = b''.join(mk(*a) for a in part)

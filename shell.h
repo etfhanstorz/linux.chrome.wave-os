@@ -24,7 +24,7 @@ static void run_cmd(char *line) {
     while (*arg && *arg != ' ') arg++;
     if (*arg) { *arg++ = 0; while (*arg == ' ') arg++; }
     if (!*line) return;
-    if (streq(line, "help")) outs("commands: help version info echo color clear errors wifi wifion wififw wifiinit netdemo update wififind wifitry wifiv wifigap wifidiv wifiscan wifiscanm wifiscanblk wifiscan5 cryptotest reboot\n");
+    if (streq(line, "help")) outs("commands: help version info echo color clear errors wifi wifion wififw wifiinit netdemo update wifichan wififind wifitry wifiv wifigap wifidiv wifiscan wifiscanm wifiscanblk wifiscan5 cryptotest reboot\n");
     else if (streq(line, "version")) outs(VERSION "\n");
     else if (streq(line, "info")) cmd_info();
     else if (streq(line, "echo")) { outs(arg); out('\n'); }
@@ -39,6 +39,7 @@ static void run_cmd(char *line) {
     else if (streq(line, "wifidiv")) { rd_div = rd_div == 0 ? 8 : rd_div >= 64 ? 0 : rd_div * 2; outs("big-read clock divider: "); put_dec(rd_div); outs(rd_div ? "\n" : " (unchanged)\n"); }
     else if (streq(line, "netdemo")) net_demo();
     else if (streq(line, "update")) wave_update(arg);
+    else if (streq(line, "wifichan")) wifi_chan(arg);
     else if (streq(line, "wififind")) wifi_find(arg);
     else if (streq(line, "wifitry")) wifi_try();
     else if (streq(line, "wifiv")) { wifi_verbose = !wifi_verbose; outs(wifi_verbose ? "verbose scan output on\n" : "verbose scan output off\n"); }
