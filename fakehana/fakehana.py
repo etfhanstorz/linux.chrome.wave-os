@@ -133,6 +133,17 @@ class Machine:
         self.net = FakeNet()                          # virtual network card + a tiny fake LAN (fake-only)
         if self.msdc.loader:
             self.msdc.loader.lan = self.net            # the fake Wi-Fi router forwards to the same fake LAN
+        page = (b'<!DOCTYPE html><html><head><title>Fake &amp; Test Page</title><style>body{color:red}</style>'
+                b'<script>alert("never shown")</script></head><body><h1>Hello from the fake web</h1>'
+                b'<p>This is a <b>test page</b> with   lots   of  spaces, an entity &lt;tag&gt; and &#169; 2026 \xe2\x80\x94 dash.</p>'
+                b'<ul><li>First item</li><li>Second item with a <a href="/two.html">link to page two</a></li>'
+                b'<li><a href="http://example.test/old">a redirect</a></li><li><a href="https://secure.test/">an https link</a></li></ul>'
+                b'<p>' + b'A long paragraph that needs wrapping. ' * 12 + b'</p>'
+                b'<pre>  preformatted\n    keeps   its spaces</pre><img src="x.png" alt="a picture">'
+                + b''.join(b'<p>Line %d of filler so the page scrolls.</p>' % i for i in range(1, 41)) + b'</body></html>')
+        self.net.web['/'] = (200, '', page)
+        self.net.web['/two.html'] = (200, '', b'<html><head><title>Page Two</title></head><body><h2>Page two</h2><p>You followed a link. <a href="/">Back to the start</a></p></body></html>')
+        self.net.web['/old'] = (302, 'Location: /two.html\r\n', b'moved')
         img = args.update_image
         if img and os.path.exists(img):                # the fake PC's update server: /Image and a signed /manifest
             data = open(img, 'rb').read()

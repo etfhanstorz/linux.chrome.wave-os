@@ -87,6 +87,14 @@ the EC sent back (`EC_RES_*` in Linux `cros_ec_commands.h`).
 | **6.17.1** | Connected, but the router gave no network address (DHCP) | |
 | **7.01.1** | Not connected: run k (wificonnect) first | |
 | **7.01.2** | No ping answer | |
+| **7.30.1** | No DNS server: connect to Wi-Fi first (k) | |
+| **7.30.2** | That name does not exist | |
+| **7.30.3** | The DNS server did not answer | |
+| **7.30.4** | Not a valid name | |
+| **7.31.1** | Browser: the address is not valid (it must start with http://) | |
+| **7.31.2** | Browser: the page needs HTTPS, which wave-os cannot do yet | |
+| **7.32.N** | Browser: could not load the page (N = 2 no connection, 3 too slow, 4 answer not understood) | |
+| **7.33.1** | Browser: too many redirects | |
 
 ## 7 Network and update
 
