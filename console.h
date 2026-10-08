@@ -31,16 +31,18 @@ static void glyph(u32 cx, u32 cy, char c) {
             }
             px(cx * CW + X, cy * CH + Y, cov == 0 ? con_bg : cov == 4 ? con_fg : mix4(con_bg, con_fg, cov));
         }
-}static void con_clear(void) {
+}static u32 con_top;                                             // first row text may use (1 = row 0 is the status bar)
+static int con_cleared;                                         // set by con_clear(): the status bar must be drawn again
+static void con_clear(void) {
     for (u32 y = 0; y < con_fb.h; y++) for (u32 x = 0; x < con_fb.w; x++) px(x, y, con_bg);
-    con_col = con_row = 0;
+    con_col = 0; con_row = con_top; con_cleared = 1;
 }
 // Scrolls SCROLL_LINES text lines at once (so the screen redraws 8x less often) and copies 8 bytes per step (8x faster per redraw).
 #define SCROLL_LINES 8
 static void con_scroll(void) {
     u32 n = con_rows > SCROLL_LINES * 2 ? SCROLL_LINES : 1;
     u32 words = con_cols * CW * (con_fb.bpp / 8) / 8;                      // 8-byte words per pixel row (a whole number: cols*12 pixels of 4 bytes)
-    for (u32 y = 0; y + n * CH < con_rows * CH; y++) {
+    for (u32 y = con_top * CH; y + n * CH < con_rows * CH; y++) {
         volatile u64 *d = (volatile u64 *)((u8 *)con_fb.addr + (u64)y * con_fb.stride);
         volatile u64 *s = (volatile u64 *)((u8 *)con_fb.addr + (u64)(y + n * CH) * con_fb.stride);
         for (u32 i = 0; i < words; i++) d[i] = s[i];

@@ -126,6 +126,9 @@ class Machine:
         r[('gpio', 0x520)] = 0xfbe4 | (1 << 6)        # din 32-47: gpio38 (chip irq) high
         r[('gpio', 0x710)] = 0x1249                   # pins 85-89 mode 1 (85 = audio data, not yet GPIO)
         self.pmic = {0x0100: 0x2091, 0x041e: 0x0000, 0x043a: 0x00a1}   # CID; VGP3 off; VGP3 at 2.8 V
+        import time as _t
+        g = _t.gmtime(_t.time() - 3600)                                    # MODEL: the clock chip runs an hour behind (NTP corrects it)
+        self.pmic.update({0xe00a: g.tm_sec, 0xe00c: g.tm_min, 0xe00e: g.tm_hour, 0xe010: g.tm_mday, 0xe012: g.tm_wday, 0xe014: g.tm_mon, 0xe016: g.tm_year - 1968})
         self.pwrap_fsm, self.pwrap_data = 0, 0
         fw_path = args.firmware
         fw = open(fw_path, 'rb').read() if os.path.exists(fw_path) else None

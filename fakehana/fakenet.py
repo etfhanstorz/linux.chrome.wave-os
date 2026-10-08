@@ -32,7 +32,7 @@ class FakeNet:
         self.routes = {}            # HTTP server on the fake PC (port 8000): path -> bytes
         self.conns = {}             # guest port -> server state
         self.http_log = []
-        self.dns_names = {'example.test': PC_IP, 'site.test': PC_IP, 'example.com': PC_IP}   # the router's DNS: these names exist, everything else does not
+        self.dns_names = {'example.test': PC_IP, 'site.test': PC_IP, 'example.com': PC_IP, 'pool.ntp.org': PC_IP}   # the router's DNS: these names exist, everything else does not
         self.web = {}                                # port 80 on the fake PC: path -> (status, extra headers, body)
 
     # ---- MMIO ----
@@ -82,6 +82,12 @@ class FakeNet:
             sport, dport, ulen = struct.unpack('>HHH', p[:6]); data = p[8:ulen]
             if dport == 67: return self.dhcp(src, data)
             if dport == 53 and dstip in (GW_IP, PC_IP) and len(data) > 12: return self.dns(src, sport, srcip, dstip, data)
+            if dport == 123 and dstip == PC_IP and len(data) >= 48:                     # a time server: the real time now
+                import time as _t
+                r = bytearray(48); r[0] = 0x24; struct.pack_into('>I', r, 40, int(_t.time()) + 2208988800)
+                self.events.append('ntp answered')
+                u = struct.pack('>HHHH', 123, sport, 8 + 48, 0) + bytes(r)
+                return self.send(self.ip_packet(dstip, srcip, 17, u, src, PC_MAC))
             if dport == 5140 and dstip == PC_IP:
                 self.log_lines.append(data.decode(errors='replace')); self.events.append('PC log server got: %s' % self.log_lines[-1]); return
             if dport == 7:

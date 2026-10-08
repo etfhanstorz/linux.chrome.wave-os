@@ -362,6 +362,7 @@ static void web_draw(void) {
       v = w_nlinks; dc = 0; do { d[dc++] = v % 10; v /= 10; } while (v && dc < 3); while (dc) pb[pn++] = (char)('0' + d[--dc]); const char *l = " links"; for (u32 q = 0; l[q]; q++) pb[pn++] = l[q]; }
     pb[pn] = 0;
     web_hints();
+    bar_draw(1);
     for (u32 i = 0; pb[i] && i < 30; i++) web_cell(con_cols - 1 - pn - 1 + i, con_rows - 1, pb[i], 0xE0E6F0, 0x1A2433);
 }
 
@@ -411,7 +412,7 @@ static int web_run(const char *start) {
     char numbuf[6]; u32 numn = 0;
     for (;;) {
         int c = kb_getc();
-        if (c < 0) { wdt_kick(); wifi_service(); continue; }
+        if (c < 0) { wdt_kick(); wifi_service(); bar_tick(1); continue; }
         u32 rows = con_rows - 3, maxtop = wnl > rows ? wnl - rows : 0;
         int redraw = 1;
         if (c >= '0' && c <= '9' && numn < 4) { numbuf[numn++] = (char)c; numbuf[numn] = 0; char m[20] = "link number: "; u32 q = 13; for (u32 i = 0; i < numn; i++) m[q++] = numbuf[i]; m[q] = 0; web_status(m); continue; }

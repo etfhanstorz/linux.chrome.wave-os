@@ -104,6 +104,11 @@ class FakeEC:
             res, data = 0, b'hana_fake_ro'.ljust(32, b'\0') + b'hana_fake_rw'.ljust(32, b'\0') + b'\0' * 32 + struct.pack('<I', 2)
         elif cmd == 0x0061:                                  # EC_CMD_MKBP_INFO
             res, data = 0, struct.pack('<IIB', keymap.ROWS, keymap.COLS, 0)
+        elif cmd == 0x0007 and n >= 2:                       # EC_CMD_READ_MEMMAP: a battery at 75 %, on the charger
+            mm = bytearray(256)
+            struct.pack_into('<IIIB', mm, 0x40, 12000, 500, 3000, 0x0b)
+            struct.pack_into('<III', mm, 0x50, 4200, 11400, 4000)
+            res, data = 0, bytes(mm[params[0]:params[0] + params[1]])
         elif cmd == 0x0060:                                  # EC_CMD_MKBP_STATE
             res, data = 0, self.keys.matrix(now_s) if self.keys else bytes(keymap.COLS)
         else:

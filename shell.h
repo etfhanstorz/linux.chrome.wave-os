@@ -37,7 +37,7 @@ static void run_cmd(char *line) {
     u64 t_cmd = ticks();
     run_cmd2(line, arg);
     if (!streq(name, "prof")) prof_last_total = ticks() - t_cmd;
-    if ((name[0] == 'w' && name[1] == 'i') || streq(name, "update") || streq(name, "cryptotest") || streq(name, "netdemo") || streq(name, "ping") || streq(name, "rxtest") || streq(name, "dns") || streq(name, "rdcfg") || streq(name, "rdmode") || streq(name, "rdsweep") || streq(name, "mss") || streq(name, "log") || streq(name, "up") || streq(name, "upset")) {   // one-line summary: command, what it says, error codes
+    if ((name[0] == 'w' && name[1] == 'i') || streq(name, "update") || streq(name, "cryptotest") || streq(name, "netdemo") || streq(name, "ping") || streq(name, "rxtest") || streq(name, "dns") || streq(name, "battery") || streq(name, "rdcfg") || streq(name, "rdmode") || streq(name, "rdsweep") || streq(name, "mss") || streq(name, "log") || streq(name, "up") || streq(name, "upset")) {   // one-line summary: command, what it says, error codes
         u32 keep = con_fg;                                            // coloured: green = fine, red = errors
         con_fg = cmd_codes_n ? 0xFF6060 : 0x60FF80; outs("> "); con_fg = 0x40E0FF; outs(name); out(' ');
         con_fg = cmd_codes_n ? 0xFFE040 : C_TEXT;
@@ -49,7 +49,7 @@ static void run_cmd(char *line) {
     if (!streq(name, "log")) log_ship();                          // send what this command printed to the PC (log.h)
 }
 static void run_cmd2(char *line, char *arg) {
-    if (streq(line, "help")) outs("commands: c f j k w r web up upset log dns ping rxtest rdcfg rdmode rdsweep mss opt prof wifi5 wifijoin wificonnect help version info echo color clear errors wifi wifion wififw wifiinit netdemo update wifichan wififind wifitry wifiv wifigap wifidiv wifiscan wifiscanm wifiscanblk wifiscan5 cryptotest reboot\n");
+    if (streq(line, "help")) outs("commands: c f j k w r web up battery upset log dns ping rxtest rdcfg rdmode rdsweep mss opt prof wifi5 wifijoin wificonnect help version info echo color clear errors wifi wifion wififw wifiinit netdemo update wifichan wififind wifitry wifiv wifigap wifidiv wifiscan wifiscanm wifiscanblk wifiscan5 cryptotest reboot\n");
     else if (streq(line, "version")) outs(VERSION "\n");
     else if (streq(line, "info")) cmd_info();
     else if (streq(line, "echo")) { outs(arg); out('\n'); }
@@ -72,6 +72,7 @@ static void run_cmd2(char *line, char *arg) {
     else if (streq(line, "ping")) wifi_ping(arg);
     else if (streq(line, "rxtest")) wifi_rxtest();
     else if (streq(line, "dns")) wifi_dns(arg);
+    else if (streq(line, "battery")) bat_cmd();
     else if (streq(line, "web")) web_run(*arg ? arg : "http://example.com");
     else if (streq(line, "rdcfg")) wifi_rdcfg(arg);
     else if (streq(line, "rdmode")) wifi_rdmode(arg);
@@ -104,6 +105,7 @@ static void run_cmd2(char *line, char *arg) {
 static void shell(void) {
     static char buf[128];
     u32 n = 0;
+    con_top = 1; if (con_row < 1) con_row = 1; bar_dirty = 1;                // row 0 is the status bar from now on
     con_fg = 0x40E0FF; outs("\n  ~~~~  "); con_fg = C_TEXT; outs(VERSION); con_fg = 0x40E0FF; outs("  ~~~~\n"); con_fg = 0x808090;
     outs("  type help   c = wifichan   f = wififind   r = repeat\n\n"); con_fg = C_TEXT;
     if (pmk_handoff) { pmk_handoff = 0; static char first[8] = "k"; con_fg = 0x40E0FF; outs("wave"); con_fg = 0x60FF80; outs("> "); con_fg = C_TEXT; outs("k\n"); run_cmd(first); }   // after an update: reconnect on our own
@@ -113,6 +115,8 @@ static void shell(void) {
             glyph(con_col, con_row, '_');
             int c;
             while ((c = input_poll()) < 0) {
+                if (con_cleared) { con_cleared = 0; bar_dirty = 1; }
+                bar_tick(0);
                 if (wifi_service()) {                                   // the network printed something: show the prompt and what was typed again
                     con_fg = 0x40E0FF; outs("wave"); con_fg = 0x60FF80; outs("> "); con_fg = C_TEXT;
                     for (u32 q = 0; q < n; q++) out(buf[q]);
