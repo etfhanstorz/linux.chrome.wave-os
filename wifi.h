@@ -335,6 +335,7 @@ static int sdio_read_port1(u32 addr, u8 *out, u32 blocks) {
 // single-block reads always work). The port is a FIFO, so read a packet one 256-byte block at a time instead.
 static u32 rd_total;                     // bytes of the current packet that arrived before a failure
 static u32 mb_err, mb_got, mb_hw, mb_fail;   // last failed multi-block read: controller error, bytes that arrived, hardware timeout?
+static u32 rd_chunk = 512;               // bytes per byte-mode transfer (4..512, multiple of 4)
 static u32 rd_div;                       // 0 = leave the bus clock alone for big reads, else the clock divider to use (wifidiv cycles it)
 static u32 rd_gap_us = 0;             // pause between pieces of one packet (see sdio_read_port)
 static int wifi_verbose;                 // 1 = also print the long scan diagnostics (command: wifiv)
@@ -382,8 +383,8 @@ static int sdio_read_port(u32 addr, u8 *out, u32 blocks) {
         int fail = 0;
         u32 save_div = (msdc_rd(MSDC_CFG) >> 8) & 0xff;
         if (rd_div && len > 256) msdc_set_clock(rd_div);
-        for (u32 off = 0; off < len && !fail; off += 512) {                  // v1.33 chunking: 512 bytes per transfer (best result so far: 5 of 16 records)
-            u32 n = len - off < 512 ? len - off : 512;
+        for (u32 off = 0; off < len && !fail; off += rd_chunk) {              // 512 bytes per transfer by default; wifitry tries other sizes
+            u32 n = len - off < rd_chunk ? len - off : rd_chunk;
             int e = sdio_read_bytes_once(addr, out + off, n);
             if (e) { fail = e; break; }
             rd_total += n;
@@ -841,6 +842,55 @@ static int wifi_scan(int with5) {
         for (; l < 24; l++) putc(' ');
         puts(" ch "); put_dec(aps[i].chan); puts("  "); putc('-'); put_dec((u64)(aps[i].rssi < 0 ? -aps[i].rssi : aps[i].rssi)); puts(" dBm  ");
         puts(aps[i].sec == 2 ? "WPA2" : aps[i].sec == 1 ? "WPA" : aps[i].sec == 3 ? "WEP?" : "open"); putc('\n');
+    }
+    return 1;
+}
+// ---- v1.39: wifitry = scan with many read settings and print a scoreboard (looking for the setting that gets whole packets through) ----
+static int ci_eq(const char *s, const char *want) {                 // does s contain `want`, ignoring case?
+    for (u32 i = 0; s[i]; i++) {
+        u32 k = 0;
+        while (want[k] && s[i + k] && ((s[i + k] | 0x20) == (want[k] | 0x20))) k++;
+        if (!want[k]) return 1;
+    }
+    return 0;
+}
+
+struct trycfg { int mode; u32 chunk, div; };
+static const struct trycfg tries[] = {
+    {1, 512, 0}, {1, 512, 8}, {1, 512, 16}, {1, 512, 32}, {1, 512, 64},
+    {1, 256, 0}, {1, 256, 16}, {1, 256, 64}, {1, 128, 0}, {1, 128, 32},
+    {0, 256, 0}, {2, 256, 0},
+};
+
+static int wifi_try(void) {
+    if (!wifi_ready && !wifi_init()) return 0;
+    u8 r[8]; u32 n = 0;
+    static const u8 macctl[6] = {0x13, 0x00, 0x00, 0x00, 0x00, 0x00};
+    wifi_cmd(0x0028, macctl, sizeof macctl, r, sizeof r, &n);
+    static const u8 ch24[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
+    puts("cfg  mode chunk div | events full recs nets home\n");
+    int best = -1; u32 best_recs = 0, best_nap = 0;
+    static struct ap best_aps[32];
+    wifi_event_hook = scan_event;
+    for (u32 t = 0; t < sizeof tries / sizeof tries[0]; t++) {
+        wifi_read_bytes = tries[t].mode; rd_chunk = tries[t].chunk; rd_div = tries[t].div; rd_gap_us = 0;
+        nap = 0; scan_events = 0; scan_bytes = 0; dbg_taken = 0; raw_taken = 0; ev_log = 0; recs_seen = 0; mb_fail = 0;
+        wdt_kick();
+        int ok = scan_band(0, ch24, sizeof ch24);
+        u32 full = 0, home = 0;
+        for (u32 i = 0; i < ev_log; i++) if (ev_sleft[i] == 0) full++;
+        for (u32 i = 0; i < nap; i++) if (ci_eq(aps[i].ssid, "home")) home = 1;
+        put_dec(t + 1); puts("    "); put_dec((u64)tries[t].mode); puts("    "); put_dec(tries[t].chunk); puts("   "); put_dec(tries[t].div);
+        puts(" | "); put_dec(scan_events); puts("      "); put_dec(full); puts("    "); put_dec(recs_seen); puts("    "); put_dec(nap); puts("    ");
+        puts(ok ? (home ? "YES" : "no") : "ERR"); putc('\n');
+        if (recs_seen > best_recs || (recs_seen == best_recs && home)) { best = (int)t; best_recs = recs_seen; best_nap = nap; for (u32 i = 0; i < nap; i++) best_aps[i] = aps[i]; }
+    }
+    wifi_event_hook = 0;
+    wifi_read_bytes = 1; rd_chunk = 512; rd_div = 0;
+    puts("best: cfg "); put_dec((u64)(best + 1)); puts(" with "); put_dec(best_recs); puts(" records\n");
+    for (u32 i = 0; i < best_nap && i < 14; i++) {
+        if (!best_aps[i].ssid[0]) continue;
+        puts("  "); puts(best_aps[i].ssid); puts("  ch "); put_dec(best_aps[i].chan); putc('\n');
     }
     return 1;
 }
