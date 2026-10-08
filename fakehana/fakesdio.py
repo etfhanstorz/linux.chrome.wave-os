@@ -85,6 +85,7 @@ class FakeFirmwareLoader:
         self.data_ptr = 0                # next data port the chip fills (rolling, like Linux curr_rd_port)
         self.partial = {}                # data port -> bytes not yet read (byte-mode reads come in 512-byte pieces)
         self.pending = []                # received packets waiting for a free data port (the real chip's flow control)
+        self.restart_model = True        # MODEL (real hana): see port_read
         self.assoc = None                # set when the host associated: (bssid, ssid)
         self.lan = None                  # the fake LAN behind the router (set by fakehana.py)
         self.ap = None                   # the fake WPA2 router (made on first use)
@@ -248,6 +249,9 @@ class FakeFirmwareLoader:
             if pt not in self.partial and pt in self.data_q:
                 self.partial[pt] = self.data_q.pop(pt)
             buf = self.partial.get(pt, b'')
+            self.reads = getattr(self, 'reads', 0) + 1
+            if self.restart_model:
+                return buf[:nbytes].ljust(nbytes, b'\0')       # a second read of the same packet gets the packet's beginning again; the packet is released at the next bitmap check
             out, rest = buf[:nbytes], buf[nbytes:]
             if rest: self.partial[pt] = rest
             else: self.partial.pop(pt, None)
@@ -268,6 +272,7 @@ class FakeFirmwareLoader:
         if r == 0x02:
             return self.mask
         if 0x04 <= r <= 0x07:                            # upload (receive) bitmap: bit p = data port p has a packet
+            if self.restart_model and r == 0x04: self.partial.clear()     # the packet the host just read is gone
             self.fill_ports()
             bm = sum(1 << pt for pt in self.data_q)
             return (bm >> (8 * (r - 0x04))) & 0xff

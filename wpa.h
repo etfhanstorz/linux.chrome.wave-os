@@ -258,3 +258,21 @@ static int wifi_rdcfg(const char *arg) {
     sum_s("chunk "); sum_u(rd_chunk); sum_s(" gap "); sum_u(rd_gap_us); sum_s(" div "); sum_u(rd_div);
     return 1;
 }
+
+// rdmode [MODE [DTOC]]: how a packet is read from the chip. 1 = pieces of up to 512 bytes (only works for packets up to ~512 bytes: a second read
+// restarts the packet), 2 = the whole packet in ONE multi-block transfer (what Linux does; DTOC = data timeout counter 1..255 for it), 0 = 256-byte blocks.
+static int wifi_rdmode(const char *arg) {
+    const char *s = arg;
+    if (*s) { u32 m = parse_num(&s); wifi_read_bytes = m > 2 ? 1 : (int)m; while (*s == ' ') s++; if (*s) rd_dtoc = parse_num(&s) & 255; }
+    puts("read mode "); put_dec((u32)wifi_read_bytes); puts(", data timeout "); put_dec(rd_dtoc); putc('\n');
+    sum_s("mode "); sum_u((u32)wifi_read_bytes); sum_s(" dtoc "); sum_u(rd_dtoc);
+    return 1;
+}
+// mss [N]: the largest TCP payload we ask senders for (applies to the next connection)
+static int wifi_mss(const char *arg) {
+    const char *s = arg;
+    if (*s) { u32 m = parse_num(&s); if (m >= 100 && m <= 1460) tcp_mss = m; }
+    puts("tcp mss "); put_dec(tcp_mss); putc('\n');
+    sum_s("mss "); sum_u(tcp_mss);
+    return 1;
+}

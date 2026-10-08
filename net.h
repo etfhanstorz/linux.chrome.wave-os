@@ -267,12 +267,13 @@ static int net_udp(u32 dst, u32 sport, u32 dport, const u8 *data, u32 len) {
 #define TCP_RESET 4
 static struct { u32 state, lport, rport, rip, snd_nxt, rcv_nxt; u8 *dst; u32 dstmax, got, overflow, segs; u8 rmac[6]; } tcp;
 
+static u32 tcp_mss = 320;                                 // largest TCP payload we ask the sender for (v1.53.5): the chip can only hand over ~512 bytes per bus read (see rdmode); `mss N` changes it
 static int tcp_send(u32 flags, const u8 *data, u32 len) {
     static u8 s[1500];
     u32 hl = (flags & 2) ? 24 : 20;                                    // SYN carries the MSS option
     be16w(s, tcp.lport); be16w(s + 2, tcp.rport); be32w(s + 4, tcp.snd_nxt); be32w(s + 8, (flags & 16) ? tcp.rcv_nxt : 0);
     s[12] = (hl / 4) << 4; s[13] = flags; be16w(s + 14, 16384); be16w(s + 16, 0); be16w(s + 18, 0);
-    if (hl == 24) { s[20] = 2; s[21] = 4; be16w(s + 22, 1460); }
+    if (hl == 24) { s[20] = 2; s[21] = 4; be16w(s + 22, tcp_mss); }
     mcopy(s + hl, data, len);
     u8 ph[12]; be32w(ph, net_ip); be32w(ph + 4, tcp.rip); ph[8] = 0; ph[9] = 6; be16w(ph + 10, hl + len);   // pseudo header
     be16w(s + 16, ~csum(s, hl + len, csum(ph, 12, 0)) & 0xffff);

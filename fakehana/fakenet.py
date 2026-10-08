@@ -108,7 +108,14 @@ class FakeNet:
         if dport != 8000: return
         st = self.conns.get(sport)
         if fl & 2:                                                          # SYN
-            st = self.conns[sport] = dict(snd=5000, rcv=seq + 1, sent=False)
+            mss = 1460                                                  # honour the MSS option in the client's SYN, like a real server
+            o = hl + 0; i = 20
+            while i + 1 < hl:
+                if p[i] == 0: break
+                if p[i] == 1: i += 1; continue
+                if p[i] == 2 and p[i + 1] == 4: mss = struct.unpack('>H', p[i + 2:i + 4])[0]
+                i += max(2, p[i + 1])
+            st = self.conns[sport] = dict(snd=5000, rcv=seq + 1, sent=False, mss=mss)
             self.send(self.tcp_packet(8000, sport, st['snd'], st['rcv'], 18, mss=True)); st['snd'] += 1
             return
         if not st: return
@@ -120,8 +127,9 @@ class FakeNet:
             if body is None: resp = b'HTTP/1.0 404 Not Found\r\nContent-Length: 0\r\n\r\n'
             else: resp = b'HTTP/1.0 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: %d\r\n\r\n' % len(body) + body
             self.events.append('http GET %s -> %d bytes' % (path, len(resp)))
-            for i in range(0, len(resp), 1460):
-                chunk = resp[i:i + 1460]; last = i + 1460 >= len(resp)
+            m = st.get('mss', 1460)
+            for i in range(0, len(resp), m):
+                chunk = resp[i:i + m]; last = i + m >= len(resp)
                 self.send(self.tcp_packet(8000, sport, st['snd'], st['rcv'], 25 if last else 24, chunk))        # ACK|PSH (+FIN on the last)
                 st['snd'] += len(chunk)
             st['snd'] += 1                                                  # the FIN

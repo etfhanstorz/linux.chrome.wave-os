@@ -298,8 +298,10 @@ static int sdio_write_port(u32 addr, const u8 *data, u32 blocks) {
 
 // CMD53 block read from function 1, fixed address. len = blocks * 256 bytes into out. Returns 0 or error.
 static u32 rd_got, rd_hw_timeout;        // last read: bytes that arrived, and whether the controller's own data timeout fired
+static u32 rd_dtoc;                       // data timeout counter for multi-block reads (0 = leave the controller's value; 1..255 = units of ~1M bus clocks)
 static int sdio_read_port1(u32 addr, u8 *out, u32 blocks) {
     u32 len = blocks * 256, got = 0;
+    if (rd_dtoc) msdc_wr(SDC_CFG, (msdc_rd(SDC_CFG) & 0x00ffffffu) | ((rd_dtoc & 0xff) << 24));
     u32 save_div = (msdc_rd(MSDC_CFG) >> 8) & 0xff;
 
     for (int i = 0; i < 100000 && (msdc_rd(SDC_STS) & 3); i++) ;
@@ -378,7 +380,7 @@ static int sdio_read_bytes_once(u32 addr, u8 *out, u32 len) {
 // single-block reads always work). So read a packet piece by piece instead: 256-byte blocks, or byte-mode transfers.
 static int sdio_read_port(u32 addr, u8 *out, u32 blocks) {
     rd_total = 0;
-    if (wifi_read_bytes) {
+    if (wifi_read_bytes == 1) {
         u32 len = blocks * 256;
         int fail = 0;
         u32 save_div = (msdc_rd(MSDC_CFG) >> 8) & 0xff;
