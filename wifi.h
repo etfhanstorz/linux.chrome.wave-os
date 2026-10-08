@@ -802,7 +802,7 @@ static u32 sb_no_bssmode, sb_no_ssid, sb_no_rates, sb_no_gap, sb_passive, sb_min
 static u32 sb_max = 110;                    // longest the chip listens on each channel, in ms (wifi5 raises it)
 static int scan_last_rc;                    // how the last scan command ended: 0 ok, >0 firmware error number, <0 our own failure
 static int scan_band(u32 radio, const u8 *chans, u32 nch) {
-    static u8 body[4 + 5 + 5 + 40 + 4 + 6 * 16 + 6 + 4 + 14 + 30 + 8];
+    static u8 body[4 + 5 + 5 + 40 + 4 + 7 * 16 + 6 + 4 + 14 + 30 + 8];
     static const u8 rates24[] = {0x82, 0x84, 0x8b, 0x96, 0x0c, 0x12, 0x18, 0x24, 0x30, 0x48, 0x60, 0x6c};
     static const u8 rates5[] = {0x8c, 0x12, 0x98, 0x24, 0xb0, 0x48, 0x60, 0x6c};
     u32 p = 0;
@@ -816,12 +816,12 @@ static int scan_band(u32 radio, const u8 *chans, u32 nch) {
     } else {
     put16(body + p, 0x0112); put16(body + p + 2, 1); body[p + 4] = 32; p += 5;           // wildcard SSID TLV: max length 32 = scan for ANY name (0 would mean 'this exact, empty name': v1.14 got no answer)
     }
-    put16(body + p, 0x0101); put16(body + p + 2, nch * 6); p += 4;                       // channel list TLV
+    put16(body + p, 0x0101); put16(body + p + 2, nch * 7); p += 4;                       // each channel entry is 7 bytes: radio, channel, mode, min time (2), max time (2) (v1.50.3: was 6, which the chip mis-read)                       // channel list TLV
     for (u32 i = 0; i < nch; i++) {
         body[p] = radio; body[p + 1] = chans[i];
         body[p + 2] = (radio && chans[i] >= 52 && chans[i] <= 144) ? 0x13 : 0x02;          // DFS channels: passive + hidden-SSID report + no filter; others: active, no filter (Linux MWIFIEX_*_SCAN bits)
         if (sb_passive) body[p + 2] |= 0x01;                                                // variant: listen only, no probe request
-        put16(body + p + 3, sb_min); put16(body + p + 5, sb_max); p += 6;
+        put16(body + p + 3, sb_min); put16(body + p + 5, sb_max); p += 7;
     }
     const u8 *rt = radio ? rates5 : rates24; u32 rn = radio ? sizeof rates5 : sizeof rates24;
     if (!sb_no_rates) { put16(body + p, 0x0001); put16(body + p + 2, rn); p += 4; for (u32 i = 0; i < rn; i++) body[p++] = rt[i]; }   // supported rates TLV

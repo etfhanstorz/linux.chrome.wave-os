@@ -131,15 +131,17 @@ class FakeFirmwareLoader:
                 elif ttype == 0x0112 and tlen >= 1 and tl[p + 4] != 32:
                     silent = True                              # MODEL (real hana): max_ssid_length 0 = specific scan for an empty name: no answer
                 if ttype == 0x0101:
-                    chans = [(tl[p + 4 + k * 6], tl[p + 4 + k * 6 + 1], tl[p + 4 + k * 6 + 2]) for k in range(tlen // 6)]
+                    if tlen % 7: result = 1                          # MODEL (real hana, v1.50): channel entries are 7 bytes; any other length is rejected
+                    chans = [(tl[p + 4 + k * 7], tl[p + 4 + k * 7 + 1], tl[p + 4 + k * 7 + 2]) for k in range(tlen // 7)]
                 p += 4 + tlen
-            ok = bool(chans) and all(m & 2 for _, _, m in chans)       # the channel filter must be disabled
+            ok = bool(chans) and all(m & 2 for _, _, m in chans) and result == 0       # the channel filter must be disabled
             allaps = [(b'HomeNet', '02:11:22:33:44:01', -52, 6, True), (b'CoffeeShop-Guest', '02:11:22:33:44:02', -71, 1, False),
                       (b'Neighbour5G', '02:11:22:33:44:03', -80, 149, True), (b'', '02:11:22:33:44:04', -85, 11, True),
                       (b'HomeWifi', '02:11:22:33:44:55', -62, 157, True)]
 
             def mk(ssid, mac, rssi, ch, sec):
-                ies = bytes([0, len(ssid)]) + ssid + bytes([3, 1, ch]) + (bytes([48, 4, 1, 0, 0, 0]) if sec else b'')
+                chan_ie = bytes([3, 1, ch]) if ch < 36 else bytes([61, 22, ch]) + bytes(21)       # 5 GHz beacons carry the channel in the HT operation element, not in a DS parameter set
+                ies = bytes([0, len(ssid)]) + ssid + chan_ie + (bytes([48, 4, 1, 0, 0, 0]) if sec else b'')
                 frame = struct.pack('<QHH', 123456789, 100, 0x0411 if sec else 0x0401) + ies
                 bssid = bytes.fromhex(mac.replace(':', ''))
                 t1 = struct.pack('<HH', 0x0156, 6 + len(frame)) + bssid + frame

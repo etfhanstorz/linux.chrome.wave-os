@@ -61,7 +61,7 @@ static void fill(const struct fb *f, u32 rgb) {
 
 #include "rlog.h"
 #include "console.h"
-#define VERSION "wave-os v1.50.2"
+#define VERSION "wave-os v1.51"
 #include "err.h"
 #include "sys.h"
 #include "prof.h"
