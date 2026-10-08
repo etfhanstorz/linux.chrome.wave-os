@@ -4,8 +4,8 @@
 // The password is typed on the Chromebook's own keyboard, shown only as '*', kept in RAM only, and never written to the log.
 
 static char wifi_pw[64]; static u32 wifi_pw_len;          // the typed password: only alive between typing it and deriving the key
-static u32 pmk_valid; static char pmk_ssid[33];          // the derived key (PMK) is kept for this network until a handshake fails
-static u8 pmk[32], ptk[48], anonce[32], snonce[32], gtk[16], gtk_id, ap_ver;
+static char pmk_ssid[33];          // the derived key (PMK) is kept for this network until a handshake fails
+static u8 ptk[48], anonce[32], snonce[32], gtk[16], gtk_id, ap_ver;                // (pmk, pmk_valid: update.h, so they can ride over an update)
 
 // ---- the password prompt ----
 static int wifi_read_password(void) {
@@ -185,6 +185,7 @@ static int wifi_connect(const char *name) {
     sum_n = 0; sum_res[0] = 0;
     if (!found) { errs("WIFI", 15, 6, "the network was not found: cannot join"); sum_s("not found"); return 0; }
     u32 sl = 0; while (target.ssid[sl]) sl++;
+    if (pmk_valid && pmk_any) { for (u32 i = 0; i <= sl && i < sizeof pmk_ssid; i++) pmk_ssid[i] = target.ssid[i]; pmk_any = 0; }   // a key that came over an update: it belongs to the network we just found
     if (!(pmk_valid && streq(pmk_ssid, target.ssid))) {              // no key for this network yet: ask for the password
         if (!wifi_read_password()) { for (u32 i = 0; i < sizeof wifi_pw; i++) wifi_pw[i] = 0; wifi_pw_len = 0; errs("WIFI", 16, 7, "the password must be 8 to 63 characters"); sum_s("password length"); return 0; }
         puts("computing the key from the password (takes a few seconds)...\n");

@@ -10,6 +10,22 @@
 #define UPDATE_MAX  (2u * 1024 * 1024)
 #define UPDATE_TRAMP_OFF (2u * 1024 * 1024)           // the copy routine is parked here, above the image, while it overwrites us
 static u8 update_buf[UPDATE_TRAMP_OFF + 4096] __attribute__((aligned(4096)));
+
+// Wi-Fi key hand-over (v1.53.9): the derived key (never the password) rides over an update in the new image's header bytes 24..55 (unused fields),
+// with the marker 'PMK1' at byte 60. The new image reads it at boot, wipes it, and reconnects by itself. (The old build writes it into the downloaded
+// copy in RAM only; the file on the PC is never touched.)
+static u8 pmk[32]; static u32 pmk_valid, pmk_any, pmk_handoff;       // pmk_any: the key came over an update, the network name is not known yet
+extern const u8 _start[] __attribute__((visibility("hidden")));
+#define PMK_MARK 0x314b4d50u                                         // 'PMK1'
+static void pmk_restore(void) {
+    volatile u8 *h = (volatile u8 *)_start;
+    u32 mark = h[60] | h[61] << 8 | h[62] << 16 | (u32)h[63] << 24;
+    if (mark != PMK_MARK) return;
+    for (u32 i = 0; i < 32; i++) { pmk[i] = h[24 + i]; h[24 + i] = 0; }
+    h[60] = h[61] = h[62] = h[63] = 0;
+    pmk_valid = 1; pmk_any = 1; pmk_handoff = 1;
+    puts("Wi-Fi key kept across the update: reconnecting without asking for the password\n");
+}
 extern const u8 update_tramp[] __attribute__((visibility("hidden")));
 extern const u8 update_tramp_end[] __attribute__((visibility("hidden")));
 static int log_ship(void);                            // log.h: send what has been printed to the PC
@@ -82,6 +98,11 @@ static int wave_update(const char *arg) {
     puts("ok\n");
     if (img[56] != 'A' || img[57] != 'R' || img[58] != 'M' || img[59] != 0x64) { err("NET", 27, "update: not a valid arm64 image"); return 0; }
     puts("  verified. starting the new wave-os from RAM...\n");
+    if (pmk_valid) {                                                   // hand the Wi-Fi key to the new image (only in the RAM copy)
+        for (u32 i = 0; i < 32; i++) img[24 + i] = pmk[i];
+        img[60] = PMK_MARK & 255; img[61] = PMK_MARK >> 8 & 255; img[62] = PMK_MARK >> 16 & 255; img[63] = PMK_MARK >> 24 & 255;
+        puts("  Wi-Fi key handed to the new image\n");
+    }
     log_ship();
     delay_us(2000000);
     // Hand over: park the copy routine above the downloaded image, then run it: it copies the image over ours and starts it from our own load

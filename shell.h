@@ -103,6 +103,7 @@ static void shell(void) {
     u32 n = 0;
     con_fg = 0x40E0FF; outs("\n  ~~~~  "); con_fg = C_TEXT; outs(VERSION); con_fg = 0x40E0FF; outs("  ~~~~\n"); con_fg = 0x808090;
     outs("  type help   c = wifichan   f = wififind   r = repeat\n\n"); con_fg = C_TEXT;
+    if (pmk_handoff) { pmk_handoff = 0; static char first[8] = "k"; con_fg = 0x40E0FF; outs("wave"); con_fg = 0x60FF80; outs("> "); con_fg = C_TEXT; outs("k\n"); run_cmd(first); }   // after an update: reconnect on our own
     for (;;) {
         con_fg = 0x40E0FF; outs("wave"); con_fg = 0x60FF80; outs("> "); con_fg = C_TEXT; n = 0;
         for (;;) {

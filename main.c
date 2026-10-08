@@ -61,7 +61,7 @@ static void fill(const struct fb *f, u32 rgb) {
 
 #include "rlog.h"
 #include "console.h"
-#define VERSION "wave-os v1.53.8"
+#define VERSION "wave-os v1.53.9"
 #include "err.h"
 #include "sys.h"
 #include "prof.h"
@@ -209,5 +209,6 @@ void main(const u8 *dtb) {
 #else
     puts("type help (typing goes in the Ubuntu terminal)\n\n");
 #endif
+    pmk_restore();                                          // a Wi-Fi key handed over by the build that updated us (update.h)
     shell();
 }
