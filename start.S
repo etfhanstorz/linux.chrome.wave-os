@@ -52,13 +52,16 @@ entry:
     b       7b
 8:
     // Zero BSS (PC-relative)
-    adr     x0, __bss_start
-    adr     x1, __bss_end
+    adrp    x0, __bss_start
+    add     x0, x0, :lo12:__bss_start
+    adrp    x1, __bss_end
+    add     x1, x1, :lo12:__bss_end
 3:  cmp     x0, x1
     b.hs    4f
     str     xzr, [x0], #8
     b       3b
-4:  adr     x0, stack_top
+4:  adrp    x0, stack_top
+    add     x0, x0, :lo12:stack_top
     mov     sp, x0
     // Install fault handler for the current EL: bad MMIO reads set fault_flag instead of hanging
     adr     x0, vectors
@@ -97,7 +100,8 @@ fault_handler:
 1:  mrs     x0, elr_el2
     add     x0, x0, #4
     msr     elr_el2, x0
-2:  adr     x0, fault_flag
+2:  adrp    x0, fault_flag
+    add     x0, x0, :lo12:fault_flag
     mov     w1, #1
     str     w1, [x0]
     ldp     x0, x1, [sp], #16

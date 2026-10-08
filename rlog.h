@@ -92,7 +92,10 @@ static volatile u8 *rlog_data;
 static u32 rlog_cap, rlog_len;
 static u64 rlog_zone, rlog_zone_size;
 
+#define SHIP_RING (1u << 18)                                   // 256 KB copy of everything printed, for log.h to send to the PC over Wi-Fi
+static u8 ship_ring[SHIP_RING]; static u32 ship_w;
 static void logc(char c) {
+    ship_ring[ship_w++ & (SHIP_RING - 1)] = (u8)c;
     if (!rlog_data || rlog_len >= rlog_cap) return;
     rlog_data[rlog_len++] = c;
     rlog_hdr[1] = rlog_len;      // start (next write position; no wrap)
