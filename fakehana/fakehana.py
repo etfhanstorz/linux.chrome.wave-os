@@ -524,6 +524,8 @@ def main():
         print('  Wi-Fi firmware commands: ' + ', '.join('%#06x%s' % (cmd, '' if res == 0 else ' (result %d)' % res) for cmd, res in m.msdc.loader.cmds))
     if m.net.events:
         print('  fake LAN: ' + '; '.join(m.net.events[:12]))
+    if m.msdc.loader and m.msdc.loader.ap:
+        print('  fake router: ' + '; '.join(m.msdc.loader.ap.log[-10:]) + '; keys installed: ' + ', '.join('%s %s' % (k, 'ok' if ok else 'REJECTED') for k, ok, _ in m.msdc.loader.keys_set))
     if m.keys:
         print('  keys typed: %r (done at fake %.1f s)' % (a.keys, m.keys.end_s))
 

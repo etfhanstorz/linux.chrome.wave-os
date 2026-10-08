@@ -112,7 +112,12 @@ static void shell(void) {
         for (;;) {
             glyph(con_col, con_row, '_');
             int c;
-            while ((c = input_poll()) < 0) __asm__ volatile("nop");
+            while ((c = input_poll()) < 0) {
+                if (wifi_service()) {                                   // the network printed something: show the prompt and what was typed again
+                    con_fg = 0x40E0FF; outs("wave"); con_fg = 0x60FF80; outs("> "); con_fg = C_TEXT;
+                    for (u32 q = 0; q < n; q++) out(buf[q]);
+                }
+            }
             glyph(con_col, con_row, ' ');
             if (c == '\r' || c == '\n') { out('\n'); break; }
             if (c == 0x7f || c == '\b') { if (n) { n--; putc('\b'); uart_put('\b'); uart_put(' '); uart_put('\b'); } }

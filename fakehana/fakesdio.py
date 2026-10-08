@@ -87,6 +87,7 @@ class FakeFirmwareLoader:
         self.partial = {}                # data port -> bytes not yet read (byte-mode reads come in 512-byte pieces)
         self.pending = []                # received packets waiting for a free data port (the real chip's flow control)
         self.restart_model = True        # MODEL (real hana): see port_read
+        self.drop_once = True            # MODEL: drop the link once after a while (tests the automatic reconnect)
         self.assoc = None                # set when the host associated: (bssid, ssid)
         self.lan = None                  # the fake LAN behind the router (set by fakehana.py)
         self.ap = None                   # the fake WPA2 router (made on first use)
@@ -311,6 +312,14 @@ class FakeFirmwareLoader:
         if et == 0x888e:
             if self.ap: self.ap.on_eapol(frame[6:12], frame[14:])
         elif self.ap and self.ap.done and self.lan:
+            self.after_up = getattr(self, 'after_up', 0) + 1
+            if self.after_up == 8 and not getattr(self.ap, 'rekeyed', False):
+                self.ap.group_rekey()                      # MODEL: the router refreshes the group key a while after joining
+            if self.after_up == 16 and self.drop_once:
+                self.drop_once = False; self.after_up = 100
+                self.ap.done = False
+                self.queue.append(struct.pack('<HHI', 8, 3, 0x0003)); self.int_status = 0x40     # MODEL: the link is lost (event 3)
+                return
             self.lan.guest_mac = bytes(frame[6:12])
             self.lan.from_guest(bytes(frame))
             while self.lan.rx:

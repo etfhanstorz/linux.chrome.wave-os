@@ -101,6 +101,9 @@ class FakeAP:
             wrapped = aes_wrap(ptk[16:32], plain)
             self.state = 'm3'
             self.l.push_data(sta, AP_MAC, 0x888e, self._frame(0x13ca, 16, self.replay, self.anonce, wrapped, kck=ptk[:16]))
+        elif self.state == 'done' and info == 0x0302 and replay == self.replay:      # group key message 2
+            if mic_ok(self.ptk[:16]): self.log.append('group msg2 ok'); self.rekeyed = True
+            else: self.log.append('group msg2 bad mic')
         elif self.state == 'm3' and info == 0x030a and replay == self.replay:
             if not mic_ok(self.ptk[:16]):
                 self.log.append('msg4 bad mic')
@@ -109,3 +112,14 @@ class FakeAP:
             self.state = 'done'
             self.done = True
             self.tk = self.ptk[32:48]
+
+    def group_rekey(self):
+        """Refresh the group key, the way routers do every so often: group message 1, the new key wrapped with the KEK."""
+        self.replay += 1
+        self.gtk = bytes(range(0x70, 0x80))
+        kde = bytes([0xdd, 22, 0x00, 0x0f, 0xac, 1, 2, 0]) + self.gtk
+        plain = kde + b'\xdd'
+        while len(plain) % 8:
+            plain += b'\0'
+        self.log.append('group rekey sent')
+        self.l.push_data(self.sta, AP_MAC, 0x888e, self._frame(0x1382, 0, self.replay, bytes(32), aes_wrap(self.ptk[16:32], plain), kck=self.ptk[:16]))

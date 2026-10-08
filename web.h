@@ -411,7 +411,7 @@ static int web_run(const char *start) {
     char numbuf[6]; u32 numn = 0;
     for (;;) {
         int c = kb_getc();
-        if (c < 0) { wdt_kick(); continue; }
+        if (c < 0) { wdt_kick(); wifi_service(); continue; }
         u32 rows = con_rows - 3, maxtop = wnl > rows ? wnl - rows : 0;
         int redraw = 1;
         if (c >= '0' && c <= '9' && numn < 4) { numbuf[numn++] = (char)c; numbuf[numn] = 0; char m[20] = "link number: "; u32 q = 13; for (u32 i = 0; i < numn; i++) m[q++] = numbuf[i]; m[q] = 0; web_status(m); continue; }

@@ -5,7 +5,11 @@
 
 static char wifi_pw[64]; static u32 wifi_pw_len;          // the typed password: only alive between typing it and deriving the key
 static char pmk_ssid[33];          // the derived key (PMK) is kept for this network until a handshake fails
-static u8 ptk[48], anonce[32], snonce[32], gtk[16], gtk_id, ap_ver;                // (pmk, pmk_valid: update.h, so they can ride over an update)
+static u8 ptk[48], anonce[32], snonce[32], gtk[16], gtk_id, ap_ver;
+static u32 wifi_up;                                     // 1 = connected (keys in, address from DHCP): the idle service keeps it that way
+static u8 last_replay[8];                               // the router's last key-message counter (a refresh must count higher)
+static u32 wifi_rekeys, wifi_drops, wifi_link_lost;
+static void wifi_eapol_rx(const u8 *f, u32 fl);                // (pmk, pmk_valid: update.h, so they can ride over an update)
 
 // ---- the password prompt ----
 static int wifi_read_password(void) {
@@ -50,7 +54,7 @@ static int wifi_nic_recv(u8 *out, u32 max) {
     for (int i = 0; i < 4; i++) {
         u8 *f; u32 fl;
         if (wifi_data_poll(&f, &fl) != 1) return 0;
-        if (f[12] == 0x88 && f[13] == 0x8e) continue;               // stray handshake retransmission
+        if (f[12] == 0x88 && f[13] == 0x8e) { wifi_eapol_rx(f, fl); continue; }   // a key refresh from the router (v1.6-001)
         if (fl > max) continue;
         mcopy(out, f, fl);
         return (int)fl;
@@ -158,7 +162,7 @@ static int wifi_handshake(void) {
     u8 h[20]; hmac_sha1(ptk, 16, copy, 99 + dlen, h);
     if (!meq(h, k + 77, 16)) { errs("WIFI", 16, 3, "handshake message 3 failed its signature check: the password is probably wrong"); sum_s("msg3 mic bad"); pmk_valid = 0; return 0; }
     if (!meq(anonce, k + 13, 32)) { errs("WIFI", 16, 3, "the router changed its nonce during the handshake"); sum_s("nonce changed"); return 0; }
-    mcopy(replay, k + 5, 8);
+    mcopy(replay, k + 5, 8); mcopy(last_replay, replay, 8);
     static u8 kd[256];
     if (aes_unwrap(ptk + 16, k + 95, dlen / 8 - 1, kd)) { errs("WIFI", 16, 4, "could not decrypt the group key in message 3"); sum_s("unwrap failed"); return 0; }
     u32 kdl = dlen - 8, got_gtk = 0;
@@ -180,7 +184,7 @@ static int wifi_handshake(void) {
 
 // wificonnect NAME: find, password, join, handshake, keys, DHCP.
 static int wifi_connect(const char *name) {
-    joined = 0; rd_cur_port = wr_cur_port = 0;
+    joined = 0; rd_cur_port = wr_cur_port = 0; wifi_up = 0;
     int found = wifi_find(name);
     sum_n = 0; sum_res[0] = 0;
     if (!found) { errs("WIFI", 15, 6, "the network was not found: cannot join"); sum_s("not found"); return 0; }
@@ -203,6 +207,7 @@ static int wifi_connect(const char *name) {
     mcopy(net_mac, wifi_mac, 6);
     nic_send = wifi_nic_send; nic_recv = wifi_nic_recv;
     if (!dhcp_run()) { errs("WIFI", 17, 1, "connected, but the router gave no network address (DHCP)"); sum_s("no dhcp"); return 0; }
+    wifi_up = 1;
     sum_s("up "); sum_u(net_ip >> 24); sum_c('.'); sum_u(net_ip >> 16 & 255); sum_c('.'); sum_u(net_ip >> 8 & 255); sum_c('.'); sum_u(net_ip & 255);
     return 1;
 }
@@ -335,5 +340,63 @@ static int wifi_dns(const char *arg) {
     if (r == -4) { errs("NET", 30, 4, "not a valid name"); sum_s("bad name"); return 0; }
     if (r) { errs("NET", 30, 3, "the DNS server did not answer"); sum_s("no answer"); return 0; }
     sum_u(ip >> 24); sum_c('.'); sum_u(ip >> 16 & 255); sum_c('.'); sum_u(ip >> 8 & 255); sum_c('.'); sum_u(ip & 255);
+    return 1;
+}
+// ---- staying connected (v1.6-001) ----
+// Routers refresh the shared group key every so often (often hourly) with a two-message exchange; a station that does not answer is
+// dropped. wave-os answers it here, and if the chip reports the link lost (or the router starts a whole new handshake) it reconnects
+// with the saved key, without asking for the password. wifi_service() runs whenever the shell or the browser is waiting for a key.
+static int replay_newer(const u8 *a, const u8 *b) { for (u32 i = 0; i < 8; i++) if (a[i] != b[i]) return a[i] > b[i]; return 0; }
+static void log_quiet(const char *s) { u32 k = con_on; con_on = 0; puts(s); con_on = k; }
+static void wifi_eapol_rx(const u8 *f, u32 fl) {
+    if (!wifi_up || fl < 14 + 99 || f[15] != 3 || f[18] != 2) return;
+    const u8 *e = f + 14, *k = e + 4;
+    u32 info = be16r(k + 1), dlen = be16r(k + 93);
+    if (info & 0x08) {                                                          // pairwise message 1: the router wants a whole new handshake
+        if (info & 0x80) { log_quiet("wifi: the router restarted the handshake: reconnecting\n"); wifi_link_lost = 1; }
+        return;
+    }
+    if ((info & 0x1380) != 0x1380 || (info & 7) != 2) return;                     // not a group key message 1
+    if (!replay_newer(k + 5, last_replay)) return;                               // old or repeated: ignore
+    if (fl < 14 + 99 + dlen || dlen < 24 || dlen > 256 || (dlen & 7)) return;
+    static u8 copy[99 + 256]; mcopy(copy, e, 99 + dlen); mset(copy + 4 + 77, 0, 16);
+    u8 h[20]; hmac_sha1(ptk, 16, copy, 99 + dlen, h);
+    if (!meq(h, k + 77, 16)) { log_quiet("wifi: group key message with a bad signature: ignored\n"); return; }
+    static u8 kd[256];
+    if (aes_unwrap(ptk + 16, k + 95, dlen / 8 - 1, kd)) { log_quiet("wifi: could not decrypt the new group key\n"); return; }
+    u32 got = 0, kdl = dlen - 8;
+    for (u32 i = 0; i + 2 <= kdl;) {
+        u32 id = kd[i], l = kd[i + 1];
+        if (id == 0 || i + 2 + l > kdl) break;
+        if (id == 0xdd && l >= 6 + 16 && kd[i + 2] == 0x00 && kd[i + 3] == 0x0f && kd[i + 4] == 0xac && kd[i + 5] == 1) { gtk_id = kd[i + 6] & 3; mcopy(gtk, kd + i + 8, 16); got = 1; }
+        i += 2 + l;
+    }
+    if (!got) return;
+    u8 replay[8]; mcopy(replay, k + 5, 8); mcopy(last_replay, replay, 8);
+    static u8 out[99]; u32 n = eapol_key_build(out, 0x0302, replay, 0, 0, 0);   // group message 2: done, signed
+    eapol_send(out, n);
+    u32 keep = con_on; con_on = 0;
+    if (wifi_set_key(gtk_id, 0, gtk, 0)) { wifi_rekeys++; puts("wifi: the router refreshed the group key: done\n"); }
+    con_on = keep;
+}
+// Returns 1 if it printed something on the screen (the shell then shows its prompt again).
+static u64 wifi_svc_next;
+static int wifi_service(void) {
+    if (!wifi_up || !nic_recv) return 0;
+    u64 hz = tick_hz(), now = ticks();
+    if (hz && now < wifi_svc_next) return 0;
+    wifi_svc_next = now + hz / 50;                                              // every 20 ms
+    net_poll();                                                                 // answers ARP and pings, handles key refreshes
+    u32 ev = wifi_event_drain();
+    if (ev == 0x0003 || ev == 0x0008 || ev == 0x0009) { log_quiet(ev == 3 ? "wifi: the chip lost the link\n" : "wifi: the router disconnected us\n"); wifi_link_lost = 1; }
+    if (!wifi_link_lost) return 0;
+    wifi_link_lost = 0; wifi_up = 0; wifi_drops++;
+    if (!pmk_valid) { puts("\n(Wi-Fi dropped: type k to reconnect)\n"); return 1; }
+    puts("\n(Wi-Fi dropped: reconnecting...)\n");
+    u32 keep = con_on; con_on = 0;
+    int ok = wifi_connect(pmk_ssid[0] ? pmk_ssid : WIFI_DEFAULT_SSID);
+    con_on = keep;
+    if (ok) { puts("(Wi-Fi back: "); put_ip(net_ip); puts(")\n"); log_ship(); }
+    else puts("(Wi-Fi reconnect failed: type k)\n");
     return 1;
 }
