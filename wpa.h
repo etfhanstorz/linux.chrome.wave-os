@@ -183,9 +183,13 @@ static int wifi_handshake(void) {
 }
 
 // wificonnect NAME: find, password, join, handshake, keys, DHCP.
-static int wifi_connect(const char *name) {
+static u64 cstamp[7];                                                    // when each connect stage finished (0 = not reached)
+static int wifi_connect_stages(const char *name) {
     joined = 0; rd_cur_port = wr_cur_port = 0; wifi_up = 0;
+    if (!wifi_ready) wifi_init();
+    cstamp[1] = ticks();
     int found = wifi_find(name);
+    cstamp[2] = ticks();
     sum_n = 0; sum_res[0] = 0;
     if (!found) { errs("WIFI", 15, 6, "the network was not found: cannot join"); sum_s("not found"); return 0; }
     u32 sl = 0; while (target.ssid[sl]) sl++;
@@ -200,16 +204,32 @@ static int wifi_connect(const char *name) {
         wifi_pw_len = 0; pmk_valid = 1;
         for (u32 i = 0; i <= sl && i < sizeof pmk_ssid; i++) pmk_ssid[i] = target.ssid[i];
     }
+    cstamp[3] = ticks();
     if (!wifi_assoc()) return 0;
+    cstamp[4] = ticks();
     sum_n = 0; sum_res[0] = 0;
     if (!wifi_handshake()) return 0;
+    cstamp[5] = ticks();
     sum_n = 0; sum_res[0] = 0;
     mcopy(net_mac, wifi_mac, 6);
     nic_send = wifi_nic_send; nic_recv = wifi_nic_recv;
     if (!dhcp_run()) { errs("WIFI", 17, 1, "connected, but the router gave no network address (DHCP)"); sum_s("no dhcp"); return 0; }
+    cstamp[6] = ticks();
     wifi_up = 1;
     sum_s("up "); sum_u(net_ip >> 24); sum_c('.'); sum_u(net_ip >> 16 & 255); sum_c('.'); sum_u(net_ip >> 8 & 255); sum_c('.'); sum_u(net_ip & 255);
     return 1;
+}
+// wificonnect: the stages above, then one line with how long each took (it goes to the log too, so slow stages can be found)
+static int wifi_connect(const char *name) {
+    for (u32 i = 0; i < 7; i++) cstamp[i] = 0;
+    cstamp[0] = ticks();
+    int ok = wifi_connect_stages(name);
+    static const char *lab[6] = {"chip ", "find ", "key ", "join ", "handshake ", "address "};
+    puts("  connect times:");
+    for (u32 i = 1; i < 7; i++) { if (!cstamp[i]) break; puts(" "); puts(lab[i - 1]); put_secs(ms_of(cstamp[i] - cstamp[i - 1])); putc('s'); }
+    puts(wifi_last_chan ? "  (channel " : ""); if (wifi_last_chan) { put_dec(wifi_last_chan); putc(')'); }
+    putc('\n');
+    return ok;
 }
 
 // ping [ADDRESS]: default = the router

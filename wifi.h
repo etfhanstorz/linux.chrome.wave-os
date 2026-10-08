@@ -422,7 +422,8 @@ static int wifi_fw(void) {
     int bic = sdio_read_byte(0, 0x07);
     if (bic < 0 || sdio_write_byte(0, 0x07, ((u32)bic & ~3u) | 2)) { errs("WIFI", 6, 5, "SDIO register read (CMD52) failed"); return 0; }
     msdc_wr(SDC_CFG, (msdc_rd(SDC_CFG) & ~(3u << 16)) | (1u << 16));
-    msdc_set_clock(4);
+    msdc_set_clock(opt_on(OPT_FASTCLK) ? 2 : 4);                                   // opt 2 "fastclk": twice the bus clock (v1.6-002 experiment)
+    if (opt_on(OPT_FASTCLK) && sdio_read_byte(0, 0x00) < 0) { puts("  fast bus clock does not work here: back to the normal one\n"); msdc_set_clock(4); }
     if (sdio_read_byte(0, 0x00) < 0) { errs("WIFI", 9, 1, "firmware upload failed: bus unreliable at the faster speed"); return 0; }
     // "new mode": data goes through one memory port at 0x10000 (reg numbers: Linux mwifiex_reg_sd8897)
     int v;
@@ -895,6 +896,10 @@ static int wifi_scan(int with5) {
 // ---- v1.40: wififind NAME = directed scan. Asks the chip for ONE network by name, so the answer is a tiny packet that
 // reads cleanly (big multi-network scan packets lose bytes on hana). Remembers the result for the join.
 static struct ap target; static int have_target;
+static u32 wifi_last_chan;                       // the channel the network was found on last time (this boot)
+#ifndef WIFI_HINT_CHAN
+#define WIFI_HINT_CHAN 0                         // wifi_local.h may say which channel your router uses (0 = unknown: search everything)
+#endif
 static void ap_copy(struct ap *d, const struct ap *s) { volatile u8 *dd = (volatile u8 *)d; const u8 *ss = (const u8 *)s; for (u32 i = 0; i < sizeof *d; i++) dd[i] = ss[i]; }   // bytewise: a plain struct copy makes the compiler call memcpy, which does not exist here
 static int wifi_find(const char *name) {
     u32 l = 0;
@@ -906,11 +911,22 @@ static int wifi_find(const char *name) {
     static const u8 macctl[6] = {0x13, 0x00, 0x00, 0x00, 0x00, 0x00};
     wifi_cmd(0x0028, macctl, sizeof macctl, r, sizeof r, &n);
     static const u8 ch24[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
-    static const u8 ch5[] = {36, 40, 44, 48, 52, 56, 60, 64, 100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140, 144, 149, 153, 157, 161, 165};   // all US 5 GHz channels (52-144 are DFS: passive listening only)
+    static const u8 ch5[] = {36, 40, 44, 48, 149, 153, 157, 161, 165, 52, 56, 60, 64, 100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140, 144};   // US 5 GHz: the normal channels first, the DFS ones (52-144, listen-only, slow) last
     nap = 0; scan_events = 0; scan_bytes = 0; dbg_taken = 0; raw_taken = 0; ev_log = 0; recs_seen = 0; mb_fail = 0;
     wifi_event_hook = scan_event;
     have_target = 0;
     char grp[10]; u32 gn = 0;
+    // v1.6-002 shortcut: look on the channel the network was last seen on (this boot), or the hint in wifi_local.h, before searching everything
+    u32 hint = wifi_last_chan ? wifi_last_chan : WIFI_HINT_CHAN;
+    if (hint) {
+        u8 hc = (u8)hint;
+        scan_cmd_ms = 3000;
+        scan_band(hint >= 36 ? 1 : 0, &hc, 1);
+        scan_cmd_ms = 10000;
+        for (u32 i = 0; i < nap && !have_target; i++) if (streq(aps[i].ssid, scan_ssid)) { ap_copy(&target, &aps[i]); have_target = 1; }
+        if (have_target) grp[gn++] = 'h';
+    }
+    if (!have_target) {
     if (wifi_verbose) { puts("looking for "); puts(scan_ssid); puts(" on 2.4 GHz...\n"); }
     grp[gn++] = scan_band(0, ch24, sizeof ch24) ? 'a' : '-';
     for (u32 i = 0; i < nap && !have_target; i++) if (streq(aps[i].ssid, scan_ssid)) { ap_copy(&target, &aps[i]); have_target = 1; }
@@ -923,6 +939,8 @@ static int wifi_find(const char *name) {
         if (wifi_verbose) { puts("5g "); put_dec(ch5[i]); puts(ok5 ? ": ok\n" : ": NO ANSWER\n"); }
         for (u32 k = 0; k < nap && !have_target; k++) if (streq(aps[k].ssid, scan_ssid)) { ap_copy(&target, &aps[k]); have_target = 1; }
     }
+    }
+    if (have_target) wifi_last_chan = target.chan;
     scan_cmd_ms = 10000;    wifi_event_hook = 0;
     scan_ssid_len = 0;
     grp[gn] = 0;

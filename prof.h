@@ -30,8 +30,9 @@ static void put_secs(u32 ms) {                                        // 12345 -
 // ---- optimization switches ----
 #define OPT_WARM    0          // wifiinit: keep a chip that is already up instead of power-cycling and re-uploading the firmware (saves ~the whole fw upload)
 #define OPT_FASTGAP 1          // 1 ms instead of 5 ms pause between Wi-Fi commands
-#define OPT_COUNT   2
-static const char *opt_names[OPT_COUNT] = {"warm", "fastgap"};
+#define OPT_FASTCLK 2          // twice the SDIO bus clock for the Wi-Fi chip (firmware upload and all traffic)
+#define OPT_COUNT   3
+static const char *opt_names[OPT_COUNT] = {"warm", "fastgap", "fastclk"};
 static u32 opt_flags;
 static int opt_on(int bit) { return (opt_flags >> bit) & 1; }
 static void opt_list(void) {
