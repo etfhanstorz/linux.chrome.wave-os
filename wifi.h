@@ -780,6 +780,7 @@ static void wifi_poll_events(u32 ms) {
 static u32 scan_cmd_ms = 10000;            // wait for a scan command's answer this long (wififind uses less: failures are common on 5 GHz)
 static char scan_ssid[33]; static u32 scan_ssid_len;      // set by wififind: scan for this one name only
 static u32 sb_no_bssmode, sb_no_ssid, sb_no_rates, sb_no_gap, sb_passive, sb_min, sb_ht, sb_probes;   // scan command variants (wifichan tries them one by one)
+static int scan_last_rc;                    // how the last scan command ended: 0 ok, >0 firmware error number, <0 our own failure
 static int scan_band(u32 radio, const u8 *chans, u32 nch) {
     static u8 body[4 + 5 + 5 + 40 + 4 + 6 * 16 + 6 + 4 + 14 + 30 + 8];
     static const u8 rates24[] = {0x82, 0x84, 0x8b, 0x96, 0x0c, 0x12, 0x18, 0x24, 0x30, 0x48, 0x60, 0x6c};
@@ -817,7 +818,7 @@ static int scan_band(u32 radio, const u8 *chans, u32 nch) {
     scan_done = 0;
     wifi_cmd_ms = scan_cmd_ms;                                      // the firmware answers only after the scan: Linux waits ~10 s
     int rc = wifi_cmd(0x0107, body, p, r, sizeof r, &n);
-    wifi_cmd_ms = 1000;
+    wifi_cmd_ms = 1000; scan_last_rc = rc;
     if (!wifi_cmd_err("SCAN", rc, 0)) return 0;
     wifi_poll_events(6000);
     return 1;
@@ -920,7 +921,7 @@ static int wifi_set_domain(void) {
     for (u32 i = 0; i < nt; i++) { b[p++] = trip[i][0]; b[p++] = trip[i][1]; b[p++] = trip[i][2]; }
     u8 r[16]; u32 n = 0;
     int rc = wifi_cmd(0x005b, b, p, r, sizeof r, &n);
-    dom_res = rc == 0 ? 'A' : rc > 0 ? 'R' : 'N';                    // A accepted, R rejected, N no answer
+    dom_res = rc == 0 ? 'A' : rc > 0 ? (rc < 10 ? '0' + rc : '+') : 'N';   // A accepted, digit = firmware error number, N no answer
     if (wifi_verbose) { puts("  domain info (US): "); putc(dom_res); putc('\n'); }
     return rc == 0;
 }
@@ -942,7 +943,6 @@ static int wifi_chan(const char *arg) {
     if (wifi_verbose) puts("variant         | answer events recs found\n");
     for (u32 v = 0; v < 12; v++) {
         sb_no_bssmode = sb_no_ssid = sb_no_rates = sb_no_gap = sb_passive = sb_min = sb_ht = sb_probes = 0;
-        if (v == 8) wifi_set_domain();                                      // the country code stays set for the variants after it
         if (v == 9 || v == 11) sb_ht = 1;
         if (v == 10 || v == 11) sb_probes = 1;
         scan_ssid_len = (v == 6 || v == 7) ? 0 : nl;                        // 'ssid-off' and 'bare': wildcard scan
@@ -951,10 +951,12 @@ static int wifi_chan(const char *arg) {
         if (v == 7) { sb_no_ssid = sb_no_rates = sb_no_gap = sb_no_bssmode = 1; }
         nap = 0; scan_events = 0; scan_bytes = 0; dbg_taken = 0; raw_taken = 0; ev_log = 0; recs_seen = 0; mb_fail = 0;
         scan_cmd_ms = 3500; wdt_kick();
+        if (v && scan_last_rc < 0 && !wifi_init()) { res[v] = 'x'; break; }  // the last scan left the chip silent: restart it so every variant gets a fresh chip
+        if (v == 8) wifi_set_domain();                                      // the country code stays set for the variants after it
         int ok = scan_band(radio, &c1, 1);
         scan_cmd_ms = 10000;
         u32 hit = 0; for (u32 k = 0; k < nap; k++) if (nl ? streq(aps[k].ssid, scan_ssid) : aps[k].chan == ch) hit = 1;
-        res[v] = !ok ? '-' : hit ? 'F' : 'a';                               // - no answer, a answered, F found
+        res[v] = hit ? 'F' : ok ? 'a' : scan_last_rc > 0 ? (scan_last_rc < 10 ? '0' + scan_last_rc : '+') : scan_last_rc == -2 ? '-' : scan_last_rc == -1 ? '=' : '~';   // - no answer, digit = firmware error number, = send failed, a answered, F found
         if (wifi_verbose) { u32 l = 0; puts(names[v]); while (names[v][l]) l++; for (; l < 15; l++) putc(' ');
             puts("| "); puts(ok ? "yes    " : "NO     "); put_dec(scan_events); puts("      "); put_dec(recs_seen); puts("    "); puts(hit ? "FOUND" : "-"); putc('\n'); }
         if (wifi_verbose && hit) { for (u32 k = 0; k < nap; k++) { puts("   "); puts(aps[k].ssid[0] ? aps[k].ssid : "(hidden)"); puts(" ch "); put_dec(aps[k].chan); puts(" -"); put_dec((u64)(aps[k].rssi < 0 ? -aps[k].rssi : aps[k].rssi)); putc('\n'); } }
