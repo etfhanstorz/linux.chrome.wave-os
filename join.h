@@ -13,6 +13,11 @@ static u16 rx_first_type; static u8 rx_first_info[32]; static u32 rx_first_len;
 static int joined; static u8 join_aid;
 static u8 our_rsn[22];                  // the RSN element we sent when associating (the handshake repeats it in message 2)
 
+// How data packets are read from the chip. Measured on the real hana (v1.53.6 rdsweep): mode 2 = the whole packet in ONE multi-block transfer
+// is the only mode that returns big packets intact (mode 1 = pieces of 512 bytes: every extra read restarts the packet, bytes after ~512 are wrong;
+// mode 0 = 256-byte blocks: wrong from byte ~120). Command-port reads keep using wifi_read_bytes (mode 1 works for those small packets).
+static int data_read_mode = 2;
+
 static int fn1_rd_u32(u32 reg, u32 *v) {   // four consecutive 8-bit registers, little endian
     u32 r = 0;
     for (u32 i = 0; i < 4; i++) { int b = fn1_rd(reg + i); if (b < 0) return -1; r |= (u32)b << (8 * i); }
@@ -34,7 +39,10 @@ static int wifi_data_poll(u8 **frame, u32 *flen) {
     rd_cur_port = (p + 1) & 31;
     if (len < 24 || len > 2312) { rx_errs++; return -1; }
     u32 blocks = (len + 255) / 256;
-    if (sdio_read_port(DATA_PORT + p, dbuf, blocks)) { rx_errs++; return -1; }
+    int saved_mode = wifi_read_bytes; wifi_read_bytes = data_read_mode;
+    int rerr = sdio_read_port(DATA_PORT + p, dbuf, blocks);
+    wifi_read_bytes = saved_mode;
+    if (rerr) { rx_errs++; return -1; }
     if (get16(dbuf + 2) != 0) { rx_other++; return 0; }          // not a data packet
     u32 pkt_len = get16(dbuf + 4 + 2), off = get16(dbuf + 4 + 4);   // rx descriptor: frame length, offset of the frame from the descriptor
     if (off < 16 || off > 200 || 4 + off + 14 > len) { rx_errs++; return -1; }

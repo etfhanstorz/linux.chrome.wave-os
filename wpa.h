@@ -263,9 +263,9 @@ static int wifi_rdcfg(const char *arg) {
 // restarts the packet), 2 = the whole packet in ONE multi-block transfer (what Linux does; DTOC = data timeout counter 1..255 for it), 0 = 256-byte blocks.
 static int wifi_rdmode(const char *arg) {
     const char *s = arg;
-    if (*s) { u32 m = parse_num(&s); wifi_read_bytes = m > 2 ? 1 : (int)m; while (*s == ' ') s++; if (*s) rd_dtoc = parse_num(&s) & 255; }
-    puts("read mode "); put_dec((u32)wifi_read_bytes); puts(", data timeout "); put_dec(rd_dtoc); putc('\n');
-    sum_s("mode "); sum_u((u32)wifi_read_bytes); sum_s(" dtoc "); sum_u(rd_dtoc);
+    if (*s) { u32 m = parse_num(&s); data_read_mode = m > 2 ? 2 : (int)m; while (*s == ' ') s++; if (*s) rd_dtoc = parse_num(&s) & 255; }
+    puts("data read mode "); put_dec((u32)data_read_mode); puts(", data timeout "); put_dec(rd_dtoc); putc('\n');
+    sum_s("mode "); sum_u((u32)data_read_mode); sum_s(" dtoc "); sum_u(rd_dtoc);
     return 1;
 }
 // mss [N]: the largest TCP payload we ask senders for (applies to the next connection)
@@ -301,11 +301,11 @@ static int wifi_rdsweep(const char *arg) {
     u32 dst = ip4(8, 8, 8, 8); if (*arg && !parse_ip(arg, &dst)) { sum_s("bad address"); return 0; }
     static const struct { u8 mode, dtoc, div; u8 chunk_pad; } cfg[] = { {1, 0, 0, 0}, {2, 0, 0, 0}, {2, 255, 0, 0}, {2, 64, 0, 0}, {2, 255, 8, 0}, {2, 255, 32, 0}, {0, 0, 0, 0} };
     static const u32 sizes[3] = {300, 800, 1400};
-    int old_mode = wifi_read_bytes; u32 old_dtoc = rd_dtoc, old_div = rd_div;
+    int old_mode = data_read_mode; u32 old_dtoc = rd_dtoc, old_div = rd_div;
     u32 good_cfgs = 0, first_good = 99;
     puts("rdsweep: ping "); put_ip(dst); puts(" with 300/800/1400 bytes under each read setting  (. ok  X damaged  - no reply)\n");
     for (u32 c = 0; c < sizeof cfg / sizeof cfg[0]; c++) {
-        wifi_read_bytes = cfg[c].mode; rd_dtoc = cfg[c].dtoc; rd_div = cfg[c].div;
+        data_read_mode = cfg[c].mode; rd_dtoc = cfg[c].dtoc; rd_div = cfg[c].div;
         u32 e0 = rx_errs;
         puts("  mode "); put_dec(cfg[c].mode); puts(" dtoc "); put_dec(cfg[c].dtoc); puts(" div "); put_dec(cfg[c].div); puts(":");
         u32 all_ok = 1;
@@ -319,7 +319,7 @@ static int wifi_rdsweep(const char *arg) {
         putc('\n');
         if (all_ok) { good_cfgs++; if (first_good == 99) first_good = c; }
     }
-    wifi_read_bytes = old_mode; rd_dtoc = old_dtoc; rd_div = old_div;
+    data_read_mode = old_mode; rd_dtoc = old_dtoc; rd_div = old_div;
     sum_u(good_cfgs); sum_s(" settings work");
     if (first_good != 99) { sum_s(", first: #"); sum_u(first_good); }
     return 1;

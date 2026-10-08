@@ -272,7 +272,7 @@ static int net_udp(u32 dst, u32 sport, u32 dport, const u8 *data, u32 len) {
 #define TCP_RESET 4
 static struct { u32 state, lport, rport, rip, snd_nxt, rcv_nxt; u8 *dst; u32 dstmax, got, overflow, segs; u8 rmac[6]; } tcp;
 
-static u32 tcp_mss = 320;                                 // largest TCP payload we ask the sender for (v1.53.5): the chip can only hand over ~512 bytes per bus read (see rdmode); `mss N` changes it
+static u32 tcp_mss = 1460;                                // largest TCP payload we ask the sender for; `mss N` changes it (v1.53.5 tried 320, but Windows never sends less than 536, and v1.53.7 reads whole packets anyway)
 static int tcp_send(u32 flags, const u8 *data, u32 len) {
     static u8 s[1500];
     u32 hl = (flags & 2) ? 24 : 20;                                    // SYN carries the MSS option
