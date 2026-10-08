@@ -556,7 +556,7 @@ static u32 get16(const u8 *p) { return p[0] | (p[1] << 8); }
 // Send host command `cmd` with `blen` body bytes; copy up to rmax response body bytes to resp.
 // Returns the firmware result (0 = ok, >0 firmware error) or a negative wave-os error: -1 send failed,
 // -2 no response, -3 malformed response.
-static int wifi_cmd(u32 cmd, const u8 *body, u32 blen, u8 *resp, u32 rmax, u32 *rlen) {
+static int wifi_cmd_raw(u32 cmd, const u8 *body, u32 blen, u8 *resp, u32 rmax, u32 *rlen) {
     u32 total = 4 + 8 + blen;
     if (total > 2312) return -1;
     wifi_dbg_n = 0;
@@ -566,7 +566,7 @@ static int wifi_cmd(u32 cmd, const u8 *body, u32 blen, u8 *resp, u32 rmax, u32 *
     for (u32 i = 0; i < blen; i++) wbuf[12 + i] = body[i];
     // Linux sends the next command only after the chip raised 'command port ready' (0x80) for the last one.
     for (u32 i = 0; i < 100 && wifi_seq > 1 && !wifi_dn_seen; i++) { int s = fn1_rd(0x03); if (s >= 0 && (s & 0x80)) wifi_dn_seen = 1; if (s >= 0 && (s & 0x40)) break; delay_us(500); }
-    delay_us(5000);
+    delay_us(opt_on(OPT_FASTGAP) ? 1000 : 5000);
     fn1_rd(0x03);                                                  // clear stale interrupt bits (reset on read)
     wifi_dn_seen = 0;
     // A failed write can leave the controller's data path stuck: reset it and retry (up to 3 times).
@@ -631,6 +631,13 @@ static int wifi_cmd(u32 cmd, const u8 *body, u32 blen, u8 *resp, u32 rmax, u32 *
     }
 }
 
+static int wifi_cmd(u16 cmd, const u8 *body, u32 blen, u8 *resp, u32 rmax, u32 *rlen) {   // timed wrapper: scan commands and all others are counted separately
+    u64 t = prof_start();
+    int rc = wifi_cmd_raw(cmd, body, blen, resp, rmax, rlen);
+    prof_stop(cmd == 0x0107 ? "scan" : "cmd", t);
+    return rc;
+}
+
 static void put_mac(const u8 *m) {
     for (u32 i = 0; i < 6; i++) { putc("0123456789abcdef"[m[i] >> 4]); putc("0123456789abcdef"[m[i] & 15]); if (i < 5) putc(':'); }
 }
@@ -689,12 +696,18 @@ static int wifi_hw_spec(void) {
 // Always start the chip from cold: its firmware state after a previous run (unread packets, a half-finished scan)
 // made the first command fail (v1.21: FUNC_INIT send error 33). Power-cycle, upload our firmware, then talk.
 static int wifi_cold_start(void) {
+    u64 t = prof_start();
     wifi_power_cycle();
+    prof_stop("pwr", t);
     wifi_seq = 0; wifi_dn_seen = 0; wifi_last_len = 0; wifi_dbg_n = 0;
-    return wifi_fw();
+    t = prof_start();
+    int ok = wifi_fw();
+    prof_stop("fw", t);
+    return ok;
 }
 
 static int wifi_init(void) {
+    if (opt_on(OPT_WARM) && wifi_ready) return 1;                    // optimization "warm": the chip is already up and ours
     for (int attempt = 1; attempt <= 2; attempt++) {
         if (!wifi_cold_start()) return 0;
         int r = wifi_hw_spec();
@@ -708,12 +721,14 @@ static int wifi_init(void) {
 // Extended scan (what Linux uses on this chip): command 0x0107 = {u32 reserved, TLVs}. The command's answer carries
 // no results; they come as events (id 0x58) holding, per access point, a BSS_SCAN_RSP TLV {bssid, frame body} and a
 // BSS_SCAN_INFO TLV {rssi, ..., channel}.
-struct ap { u8 bssid[6]; char ssid[33]; u8 chan, sec; int rssi; };
+struct ap { u8 bssid[6]; char ssid[33]; u8 chan, sec; int rssi; u8 ich, rad; };   // ich/rad: channel and band as the firmware reported them (scan info block)
 static struct ap aps[32];
 static u32 nap, scan_events, scan_done, scan_bytes;
 
+static u8 evraw[1536]; static u32 evraw_len, evraw_taken;       // the first scan report as it arrived (wifi5 dumps its structure)
 static void scan_event(const u8 *ev, u32 len) {
     if (len < 11 || get16(ev) != 0x58) return;
+    if (!evraw_taken) { evraw_taken = 1; evraw_len = len < sizeof evraw ? len : sizeof evraw; for (u32 q = 0; q < evraw_len; q++) evraw[q] = ev[q]; }
     scan_events++; scan_bytes += len;
     if (ev_log < 12) { ev_sets[ev_log] = ev[10]; ev_more[ev_log] = ev[4]; ev_size[ev_log] = get16(ev + 8); ev_len[ev_log] = len; ev_log++; }
     u32 size = get16(ev + 8), left = len - 11 < size ? len - 11 : size;
@@ -732,21 +747,25 @@ static void scan_event(const u8 *ev, u32 len) {
             cur = k < 32 ? &aps[k] : 0;
             if (cur) {
                 for (u32 m = 0; m < 6; m++) cur->bssid[m] = t[4 + m];
-                cur->ssid[0] = 0; cur->chan = 0; cur->sec = 0; cur->rssi = 0;
+                cur->ssid[0] = 0; cur->chan = 0; cur->sec = 0; cur->rssi = 0; cur->ich = 0; cur->rad = 0xff;
                 u32 cap = get16(t + 4 + 6 + 10);
                 const u8 *ie = t + 4 + 6 + 12, *end = t + 4 + tl;
+                u32 ht_chan = 0;
                 while (ie + 2 <= end && ie + 2 + ie[1] <= end) {
                     u32 id = ie[0], l = ie[1];
                     if (id == 0) { u32 q; for (q = 0; q < l && q < 32; q++) cur->ssid[q] = ie[2 + q] >= 32 && ie[2 + q] < 127 ? ie[2 + q] : '?'; cur->ssid[q] = 0; }
                     else if (id == 3 && l >= 1) cur->chan = ie[2];
+                    else if (id == 61 && l >= 1) ht_chan = ie[2];                // HT operation: primary channel (5 GHz beacons have no DS parameter element)
                     else if (id == 48) cur->sec = 2;
                     else if (id == 221 && l >= 4 && ie[2] == 0x00 && ie[3] == 0x50 && ie[4] == 0xf2 && ie[5] == 1 && cur->sec < 1) cur->sec = 1;
                     ie += 2 + l;
                 }
+                if (!cur->chan && ht_chan) cur->chan = (u8)ht_chan;
                 if (!cur->sec && (cap & 0x10)) cur->sec = 3;
             }
         } else if (type == 0x0157 && tl >= 7 && cur) {             // BSS_SCAN_INFO: rssi(s16) anpi(2) cca(1) radio(1) channel(1)
             cur->rssi = (short)get16(t + 4);
+            cur->rad = t[4 + 5]; cur->ich = t[4 + 6];
             if (!cur->chan) cur->chan = t[4 + 6];
         }
         t += 4 + tl; left -= 4 + tl;
@@ -780,6 +799,7 @@ static void wifi_poll_events(u32 ms) {
 static u32 scan_cmd_ms = 10000;            // wait for a scan command's answer this long (wififind uses less: failures are common on 5 GHz)
 static char scan_ssid[33]; static u32 scan_ssid_len;      // set by wififind: scan for this one name only
 static u32 sb_no_bssmode, sb_no_ssid, sb_no_rates, sb_no_gap, sb_passive, sb_min, sb_ht, sb_probes;   // scan command variants (wifichan tries them one by one)
+static u32 sb_max = 110;                    // longest the chip listens on each channel, in ms (wifi5 raises it)
 static int scan_last_rc;                    // how the last scan command ended: 0 ok, >0 firmware error number, <0 our own failure
 static int scan_band(u32 radio, const u8 *chans, u32 nch) {
     static u8 body[4 + 5 + 5 + 40 + 4 + 6 * 16 + 6 + 4 + 14 + 30 + 8];
@@ -801,7 +821,7 @@ static int scan_band(u32 radio, const u8 *chans, u32 nch) {
         body[p] = radio; body[p + 1] = chans[i];
         body[p + 2] = (radio && chans[i] >= 52 && chans[i] <= 144) ? 0x13 : 0x02;          // DFS channels: passive + hidden-SSID report + no filter; others: active, no filter (Linux MWIFIEX_*_SCAN bits)
         if (sb_passive) body[p + 2] |= 0x01;                                                // variant: listen only, no probe request
-        put16(body + p + 3, sb_min); put16(body + p + 5, 110); p += 6;
+        put16(body + p + 3, sb_min); put16(body + p + 5, sb_max); p += 6;
     }
     const u8 *rt = radio ? rates5 : rates24; u32 rn = radio ? sizeof rates5 : sizeof rates24;
     if (!sb_no_rates) { put16(body + p, 0x0001); put16(body + p + 2, rn); p += 4; for (u32 i = 0; i < rn; i++) body[p++] = rt[i]; }   // supported rates TLV
@@ -985,6 +1005,75 @@ static int wifi_chan(const char *arg) {
     wifi_event_hook = 0; scan_ssid_len = 0;
     sum_s("R:"); sum_rle(res); sum_s(" D:"); sum_c(dom_res); sum_s(" S:"); sum_c(snmp_res);   // the shell prints this on the one-line summary
     return 1;
+}
+// ---- v1.50.2: wifi5 [CH [NAME]] = ONE 5 GHz scan over 4 channels (CH-8 .. CH+4, default 149-161), prints what came back.
+// (v1.50 showed the chip rejects scans of a SINGLE channel with error 1, and answers scans of 4+ channels.)
+static int wifi_5g(const char *arg) {
+    u32 ch = 0, i = 0, all = 0, passive = 0, directed = 0;
+    while (arg[i] >= '0' && arg[i] <= '9') ch = ch * 10 + (arg[i++] - '0');
+    if (!ch && (arg[i] == 'a' || arg[i] == 'p' || arg[i] == 'd')) {                              // letters: a = all channels, p = passive (listen only, 400 ms each), d = ask for HomeWifi by name; e.g. "wifi5 pa"
+        while (arg[i] && arg[i] != ' ') { if (arg[i] == 'a') all = 1; else if (arg[i] == 'p') passive = 1; else if (arg[i] == 'd') directed = 1; i++; }
+    }          // "wifi5 all": every 5 GHz channel, longer listening
+    while (arg[i] == ' ') i++;
+    if (!ch) ch = 157;
+    u32 nl = 0; while (arg[i + nl] && nl < 32) { scan_ssid[nl] = arg[i + nl]; nl++; }
+    if (!nl) { const char *d = "HomeWifi"; while (d[nl]) { scan_ssid[nl] = d[nl]; nl++; } }
+    scan_ssid[nl] = 0;
+    if (!wifi_init()) return 0;                                      // always a freshly started chip: an earlier scan that hung would otherwise ruin this one
+    u8 r[8]; u32 n = 0; static const u8 macctl[6] = {0x13, 0x00, 0x00, 0x00, 0x00, 0x00};
+    wifi_cmd(0x0028, macctl, sizeof macctl, r, sizeof r, &n);
+    u8 cs[12]; u32 ncs = 4;
+    if (all) { static const u8 al[] = {36, 40, 44, 48, 149, 153, 157, 161, 165}; ncs = sizeof al; for (u32 q = 0; q < ncs; q++) cs[q] = al[q]; }
+    else for (u32 q = 0; q < 4; q++) cs[q] = (u8)(ch - 8 + 4 * q);
+    nap = 0; scan_events = 0; scan_bytes = 0; dbg_taken = 0; raw_taken = 0; ev_log = 0; recs_seen = 0; mb_fail = 0; evraw_taken = 0;
+    wifi_event_hook = scan_event; scan_ssid_len = directed ? nl : 0; scan_cmd_ms = 6000;
+    sb_passive = passive;
+    sb_max = passive ? 400 : 250;                                                                            // listen longer than the default 110 ms per channel
+    int ok = 0;
+    for (u32 g = 0; g < ncs; g += 4) { u32 ng = ncs - g < 4 ? ncs - g : 4; if (scan_band(1, cs + g, ng)) ok = 1; wdt_kick(); }
+    sb_max = 110; sb_passive = 0; scan_ssid_len = 0; scan_cmd_ms = 10000; wifi_event_hook = 0;
+    u32 hit = 0; for (u32 k = 0; k < nap; k++) if (streq(aps[k].ssid, scan_ssid)) hit = 1;
+    static const u8 home_mac[6] = {0x02, 0x11, 0x22, 0x33, 0x44, 0x55};          // HomeWifi's address, from ChromeOS (chrome://network)
+    u32 bss_exact = 0, bss_oui = 0, on157 = 0;
+    for (u32 k = 0; k < nap; k++) {
+        u32 pre = aps[k].bssid[0] == 0x02 && aps[k].bssid[1] == 0x11 && aps[k].bssid[2] == 0x22;
+        u32 ex = pre; for (u32 m = 3; m < 6; m++) if (aps[k].bssid[m] != home_mac[m]) ex = 0;
+        if (ex) bss_exact = 1; else if (pre) bss_oui = 1;
+        if (aps[k].chan == 157) on157++;
+    }
+    if (wifi_verbose && evraw_taken) {                                  // structure of the first report: length, then each block as type/length, and each record's elements as id/length
+        puts("  ev len "); put_dec(evraw_len); puts(" size "); put_dec(get16(evraw + 8)); puts(" sets "); put_dec(evraw[10]); putc('\n');
+        u32 left = evraw_len > 11 ? evraw_len - 11 : 0, tot = get16(evraw + 8); if (tot < left) left = tot;
+        const u8 *t = evraw + 11;
+        while (left >= 4) {
+            u32 ty = get16(t), tl = get16(t + 2);
+            puts("  blk "); put_hex(ty); putc('/'); put_dec(tl);
+            if (left < 4 + tl) { puts(" (cut: only "); put_dec(left - 4); puts(" left)\n"); break; }
+            if (ty == 0x0156 && tl >= 18) {
+                puts(" ie:"); const u8 *ie = t + 4 + 6 + 12, *end = t + 4 + tl; u32 cnt = 0;
+                while (ie + 2 <= end && cnt < 16) { putc(' '); put_dec(ie[0]); putc('/'); put_dec(ie[1]); if (ie + 2 + ie[1] > end) { puts("!"); break; } ie += 2 + ie[1]; cnt++; }
+            }
+            putc('\n'); t += 4 + tl; left -= 4 + tl;
+        }
+    }
+    {   // how many networks were heard on each channel, e.g.  by ch: 36:3 149:2
+        u8 cc[170]; for (u32 q = 0; q < 170; q++) cc[q] = 0;
+        for (u32 k = 0; k < nap; k++) if (aps[k].chan < 170 && cc[aps[k].chan] < 99) cc[aps[k].chan]++;
+        puts("by ch:"); for (u32 q = 0; q < 170; q++) if (cc[q]) { putc(' '); put_dec(q); putc(':'); put_dec(cc[q]); } putc('\n');
+        u8 ci[170]; for (u32 q = 0; q < 170; q++) ci[q] = 0;                  // the same count by the channel the firmware itself reported, plus its band flag
+        u32 b0 = 0, b1 = 0, bx = 0;
+        for (u32 k = 0; k < nap; k++) { if (aps[k].ich < 170 && ci[aps[k].ich] < 99) ci[aps[k].ich]++; if (aps[k].rad == 0) b0++; else if (aps[k].rad == 1) b1++; else bx++; }
+        puts("fw ch:"); for (u32 q = 0; q < 170; q++) if (ci[q]) { putc(' '); put_dec(q); putc(':'); put_dec(ci[q]); }
+        puts("  band bg:"); put_dec(b0); puts(" a:"); put_dec(b1); if (bx) { puts(" ?:"); put_dec(bx); } putc('\n');
+    }
+    if (wifi_verbose) for (u32 k = 0; k < nap; k++) { puts("  ch "); put_dec(aps[k].chan); puts("  "); puts(aps[k].ssid[0] ? aps[k].ssid : "(hidden)"); puts("  -"); put_dec((u64)(aps[k].rssi < 0 ? -aps[k].rssi : aps[k].rssi)); putc('\n'); }
+    sum_c(ok ? 'a' : '-'); sum_s(" ev"); { char t[12]; u32 k = 0, v = scan_events; do { t[k++] = '0' + v % 10; v /= 10; } while (v); while (k) sum_c(t[--k]); }
+    sum_s(" rec"); { char t[12]; u32 k = 0, v = recs_seen; do { t[k++] = '0' + v % 10; v /= 10; } while (v); while (k) sum_c(t[--k]); }
+    sum_s(" net"); { char t[12]; u32 k = 0, v = nap; do { t[k++] = '0' + v % 10; v /= 10; } while (v); while (k) sum_c(t[--k]); }
+    if (hit) sum_s(" FOUND");
+    if (bss_exact) sum_s(" MAC"); else if (bss_oui) sum_s(" OUI");                // HomeWifi's address (or one from the same router maker) was among the networks heard
+    sum_s(" c157:"); sum_c('0' + on157 % 10);                                // networks heard on channel 157
+    return ok;
 }
 // ---- v1.39: wifitry = scan with many read settings and print a scoreboard (looking for the setting that gets whole packets through) ----
 static int ci_eq(const char *s, const char *want) {                 // does s contain `want`, ignoring case?

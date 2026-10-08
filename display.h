@@ -22,7 +22,8 @@ static void pin_mode(u32 pin, u32 mode) {           // pinmux: 5 pins per regist
 static void delay_us(u32 us) {
     u64 hz = tick_hz(), t0 = ticks();
     for (u64 i = 0; i < (u64)us * 100; i++)
-        if (hz && ticks() - t0 >= hz / 1000000 * us) return;
+        if (hz && ticks() - t0 >= hz / 1000000 * us) break;
+    prof_idle += ticks() - t0;                                  // time spent just waiting (shown by prof)
 }
 
 #define RDMA0_BASE 0x1400e000UL

@@ -29,19 +29,23 @@ static void run_cmd(char *line) {
     if (streq(line, "c")) { line = "wifichan"; const char *a = "157 HomeWifi"; u32 q = 0; while ((al_arg[q] = a[q])) q++; arg = al_arg; }
     else if (streq(line, "f")) { line = "wififind"; const char *a = "HomeWifi"; u32 q = 0; while ((al_arg[q] = a[q])) q++; arg = al_arg; }
     char name[16]; { u32 q = 0; while (line[q] && q < 15) { name[q] = line[q]; q++; } name[q] = 0; }
+    if (!streq(name, "prof")) prof_reset();
     sum_reset();
+    u64 t_cmd = ticks();
     run_cmd2(line, arg);
+    if (!streq(name, "prof")) prof_last_total = ticks() - t_cmd;
     if ((name[0] == 'w' && name[1] == 'i') || streq(name, "update") || streq(name, "cryptotest") || streq(name, "netdemo")) {   // one-line summary: command, what it says, error codes
         u32 keep = con_fg;                                            // coloured: green = fine, red = errors
         con_fg = cmd_codes_n ? 0xFF6060 : 0x60FF80; outs("> "); con_fg = 0x40E0FF; outs(name); out(' ');
         con_fg = cmd_codes_n ? 0xFFE040 : C_TEXT;
         outs(sum_res[0] ? sum_res : cmd_codes_n ? "FAIL" : "ok");
         if (cmd_codes_n) { con_fg = 0xFF6060; outs(" e"); outs(cmd_codes); }
+        con_fg = 0x808090; out(' '); put_secs(ms_of(prof_last_total)); out('s');       // how long the command took
         out('\n'); con_fg = keep;
     }
 }
 static void run_cmd2(char *line, char *arg) {
-    if (streq(line, "help")) outs("commands: c f r help version info echo color clear errors wifi wifion wififw wifiinit netdemo update wifichan wififind wifitry wifiv wifigap wifidiv wifiscan wifiscanm wifiscanblk wifiscan5 cryptotest reboot\n");
+    if (streq(line, "help")) outs("commands: c f r opt prof wifi5 help version info echo color clear errors wifi wifion wififw wifiinit netdemo update wifichan wififind wifitry wifiv wifigap wifidiv wifiscan wifiscanm wifiscanblk wifiscan5 cryptotest reboot\n");
     else if (streq(line, "version")) outs(VERSION "\n");
     else if (streq(line, "info")) cmd_info();
     else if (streq(line, "echo")) { outs(arg); out('\n'); }
@@ -57,6 +61,13 @@ static void run_cmd2(char *line, char *arg) {
     else if (streq(line, "netdemo")) net_demo();
     else if (streq(line, "update")) wave_update(arg);
     else if (streq(line, "wifichan")) wifi_chan(arg);
+    else if (streq(line, "wifi5")) wifi_5g(arg);
+    else if (streq(line, "opt")) { if (*arg >= '0' && *arg <= '9') opt_toggle(*arg - '0'); opt_list(); }
+    else if (streq(line, "prof")) {
+        outs("P "); u64 tot = 0;
+        for (u32 q = 0; q < prof_n; q++) { outs(prof_spans[q].name); put_secs(ms_of(prof_spans[q].t)); out(' '); tot += prof_spans[q].t; }
+        outs("idle "); put_secs(ms_of(prof_idle)); outs(" of "); put_secs(ms_of(prof_last_total)); outs("s"); out('\n');
+    }
     else if (streq(line, "wififind")) wifi_find(arg);
     else if (streq(line, "wifitry")) wifi_try();
     else if (streq(line, "wifiv")) { wifi_verbose = !wifi_verbose; outs(wifi_verbose ? "verbose scan output on\n" : "verbose scan output off\n"); }
