@@ -136,6 +136,7 @@ class Machine:
         self.net = FakeNet()                          # virtual network card + a tiny fake LAN (fake-only)
         if self.msdc.loader:
             self.msdc.loader.lan = self.net            # the fake Wi-Fi router forwards to the same fake LAN
+            self.msdc.loader.drop_once = bool(getattr(args, 'wifi_drop', False))
         page = (b'<!DOCTYPE html><html><head><title>Fake &amp; Test Page</title><style>body{color:red}</style>'
                 b'<script>alert("never shown")</script></head><body><h1>Hello from the fake web</h1>'
                 b'<p>This is a <b>test page</b> with   lots   of  spaces, an entity &lt;tag&gt; and &#169; 2026 \xe2\x80\x94 dash.</p>'
@@ -144,6 +145,10 @@ class Machine:
                 b'<p>' + b'A long paragraph that needs wrapping. ' * 12 + b'</p>'
                 b'<pre>  preformatted\n    keeps   its spaces</pre><img src="x.png" alt="a picture">'
                 + b''.join(b'<p>Line %d of filler so the page scrolls.</p>' % i for i in range(1, 41)) + b'</body></html>')
+        page = page.replace(b'<h1>Hello from the fake web</h1>', b'<h1>Hello from the fake web</h1><p><img src="/pic.jpg" alt="a test photo"></p><p><img src="/pic.png" alt="a logo"> <img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" data-src="/pic.gif" alt="lazy gif"></p>')
+        tdir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'testimg')
+        for nm in ('pic.jpg', 'pic.png', 'pic.gif'):
+            if os.path.exists(os.path.join(tdir, nm)): self.net.web['/' + nm] = (200, '', open(os.path.join(tdir, nm), 'rb').read())
         self.net.web['/'] = (200, '', page)
         self.net.web['/two.html'] = (200, '', b'<html><head><title>Page Two</title></head><body><h2>Page two</h2><p>You followed a link. <a href="/">Back to the start</a></p></body></html>')
         self.net.web['/old'] = (302, 'Location: /two.html\r\n', b'moved')
@@ -479,6 +484,8 @@ def main():
     ap.add_argument('--ec', choices=['on', 'off'], default='on', help='scenario: the EC answers, or stays silent')
     ap.add_argument('--firmware', default=os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'fw', 'sd8897_uapsta.bin'),
                     help='the Wi-Fi firmware the fake chip checks the upload against')
+    ap.add_argument('--wifi-drop', action='store_true', help='scenario: the router drops the Wi-Fi link once after a while')
+    ap.add_argument('--log-tail', type=int, default=0, help='print the last N lines of the wave-os log at the end')
     ap.add_argument('--max-insns', type=int, default=600_000_000)
     ap.add_argument('--png', default='fakehana-screen.png')
     ap.add_argument('--mmio', action='store_true', help='print every register access')
@@ -552,6 +559,9 @@ def main():
         print('  (empty: the reboot wiped RAM)')
     elif kind == 'DONE':
         print('  (still running -- type reboot in the shell to keep the log)')
+        if a.log_tail:                                                 # --log-tail N: the end of wave-os's own log right now
+            t = m.ramoops_console() or ''
+            for line in t.rstrip('\n').split('\n')[-a.log_tail:]: print('  | ' + line)
     elif kind != 'REBOOT':
         print('  (nothing yet: the machine did not reboot by itself)')
     elif text is None:

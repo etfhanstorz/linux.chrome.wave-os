@@ -87,7 +87,7 @@ class FakeFirmwareLoader:
         self.partial = {}                # data port -> bytes not yet read (byte-mode reads come in 512-byte pieces)
         self.pending = []                # received packets waiting for a free data port (the real chip's flow control)
         self.restart_model = True        # MODEL (real hana): see port_read
-        self.drop_once = True            # MODEL: drop the link once after a while (tests the automatic reconnect)
+        self.drop_once = False           # MODEL: drop the link once after a while (fakehana --wifi-drop; tests the automatic reconnect)
         self.assoc = None                # set when the host associated: (bssid, ssid)
         self.lan = None                  # the fake LAN behind the router (set by fakehana.py)
         self.ap = None                   # the fake WPA2 router (made on first use)
