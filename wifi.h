@@ -663,6 +663,7 @@ static void wifi_power_cycle(void) {
 }
 
 // Wi-Fi step: make sure the chip is up, then run the firmware's init commands and print its MAC address.
+static u32 hw_n_cap, hw_mcs;             // the chip's own 802.11n capability word and MCS support, from GET_HW_SPEC
 static int hw_rc;                       // how the first command failed (for the final message)
 static u8 wifi_mac[6];
 static int wifi_ready;                  // FUNC_INIT + GET_HW_SPEC done in this boot
@@ -676,6 +677,7 @@ static int wifi_hw_spec(void) {
     if (!wifi_cmd_err("GET_HW_SPEC", wifi_cmd(0x0003, zero, sizeof zero, r, sizeof r, &n), 0)) return 0;
     if (n < 22) { errs("WIFI", 12, 3, "the Wi-Fi firmware's answer was not understood"); return 0; }
     for (u32 i = 0; i < 6; i++) wifi_mac[i] = r[8 + i];
+    if (n >= 44) { hw_n_cap = r[38] | (r[39] << 8) | ((u32)r[40] << 16) | ((u32)r[41] << 24); hw_mcs = r[42]; }
     u32 fwver = r[18] | (r[19] << 8) | ((u32)r[20] << 16) | ((u32)r[21] << 24);   // hw spec: mac at 8, region 14, antennas 16, release 18
     puts("  Wi-Fi MAC address "); put_mac(wifi_mac); putc('\n');
     puts("  firmware release "); put_hex(fwver); puts(", antennas "); put_dec(get16(r + 16)); puts(", region "); put_hex(get16(r + 14)); putc('\n');
@@ -777,9 +779,9 @@ static void wifi_poll_events(u32 ms) {
 
 static u32 scan_cmd_ms = 10000;            // wait for a scan command's answer this long (wififind uses less: failures are common on 5 GHz)
 static char scan_ssid[33]; static u32 scan_ssid_len;      // set by wififind: scan for this one name only
-static u32 sb_no_bssmode, sb_no_ssid, sb_no_rates, sb_no_gap, sb_passive, sb_min;   // scan command variants (wifichan tries them one by one)
+static u32 sb_no_bssmode, sb_no_ssid, sb_no_rates, sb_no_gap, sb_passive, sb_min, sb_ht, sb_probes;   // scan command variants (wifichan tries them one by one)
 static int scan_band(u32 radio, const u8 *chans, u32 nch) {
-    static u8 body[4 + 5 + 5 + 40 + 4 + 6 * 16 + 6 + 4 + 14];
+    static u8 body[4 + 5 + 5 + 40 + 4 + 6 * 16 + 6 + 4 + 14 + 30 + 8];
     static const u8 rates24[] = {0x82, 0x84, 0x8b, 0x96, 0x0c, 0x12, 0x18, 0x24, 0x30, 0x48, 0x60, 0x6c};
     static const u8 rates5[] = {0x8c, 0x12, 0x98, 0x24, 0xb0, 0x48, 0x60, 0x6c};
     u32 p = 0;
@@ -802,6 +804,14 @@ static int scan_band(u32 radio, const u8 *chans, u32 nch) {
     }
     const u8 *rt = radio ? rates5 : rates24; u32 rn = radio ? sizeof rates5 : sizeof rates24;
     if (!sb_no_rates) { put16(body + p, 0x0001); put16(body + p + 2, rn); p += 4; for (u32 i = 0; i < rn; i++) body[p++] = rt[i]; }   // supported rates TLV
+    if (sb_probes) { put16(body + p, 0x0102); put16(body + p + 2, 2); put16(body + p + 4, 2); p += 6; }                               // number of probe requests per channel
+    if (sb_ht) {                                                                                                                       // HT capabilities (what Linux attaches to scans)
+        put16(body + p, 0x002d); put16(body + p + 2, 26); p += 4;
+        for (u32 i = 0; i < 26; i++) body[p + i] = 0;
+        put16(body + p, hw_n_cap & 0xffff); body[p + 2] = 0x17;                                                                 // cap info, A-MPDU parameters
+        for (u32 i = 0; i < ((hw_mcs & 0xf) + ((hw_mcs >> 4) & 0xf)) / 2 + 1 && i < 4; i++) body[p + 3 + i] = 0xff;           // MCS rx mask: one byte per supported stream
+        p += 26;
+    }
     if (!sb_no_gap) { put16(body + p, 0x01c5); put16(body + p + 2, 2); put16(body + p + 4, 50); p += 6; }                          // gap between channels: 50 TU
     u8 r[8]; u32 n = 0;
     scan_done = 0;
@@ -895,6 +905,21 @@ static int wifi_find(const char *name) {
     puts("  "); put_mac(target.bssid); putc('\n');
     return 1;
 }
+// 802.11d domain info (command 0x005b): tells the chip the country and which channels are allowed there. ChromeOS sets this
+// (US); wave-os never did, which may be why the chip will not scan 5 GHz.
+static int wifi_set_domain(void) {
+    static u8 b[2 + 4 + 3 + 3 * 8];
+    static const u8 trip[][3] = {{1, 11, 30}, {36, 4, 23}, {52, 4, 23}, {100, 12, 23}, {149, 5, 30}};
+    u32 nt = sizeof trip / sizeof trip[0], p = 0;
+    put16(b, 1); p = 2;                                              // action: set
+    put16(b + p, 7); put16(b + p + 2, 3 + 3 * nt); p += 4;           // country information block
+    b[p++] = 'U'; b[p++] = 'S'; b[p++] = ' ';
+    for (u32 i = 0; i < nt; i++) { b[p++] = trip[i][0]; b[p++] = trip[i][1]; b[p++] = trip[i][2]; }
+    u8 r[16]; u32 n = 0;
+    int rc = wifi_cmd(0x005b, b, p, r, sizeof r, &n);
+    puts("  domain info (US): "); puts(rc == 0 ? "accepted\n" : rc > 0 ? "rejected\n" : "no answer\n");
+    return rc == 0;
+}
 // ---- v1.45: wifichan CH [NAME] = scan ONE 5 GHz channel with several variants of the scan command, to find which one the chip answers ----
 static int wifi_chan(const char *arg) {
     u32 ch = 0; u32 i = 0;
@@ -907,11 +932,14 @@ static int wifi_chan(const char *arg) {
     u8 r[8]; u32 n = 0; static const u8 macctl[6] = {0x13, 0x00, 0x00, 0x00, 0x00, 0x00};
     wifi_cmd(0x0028, macctl, sizeof macctl, r, sizeof r, &n);
     u8 c1 = (u8)ch; u32 radio = ch >= 36 ? 1 : 0;
-    static const char *names[] = {"as-is", "no-rates", "no-gap", "no-bssmode", "passive", "min40", "ssid-off", "bare"};
+    static const char *names[] = {"as-is", "no-rates", "no-gap", "no-bssmode", "passive", "min40", "ssid-off", "bare", "domain", "domain+ht", "domain+probes", "all"};
     wifi_event_hook = scan_event;
     puts("variant         | answer events recs found\n");
-    for (u32 v = 0; v < 8; v++) {
-        sb_no_bssmode = sb_no_ssid = sb_no_rates = sb_no_gap = sb_passive = sb_min = 0;
+    for (u32 v = 0; v < 12; v++) {
+        sb_no_bssmode = sb_no_ssid = sb_no_rates = sb_no_gap = sb_passive = sb_min = sb_ht = sb_probes = 0;
+        if (v == 8) wifi_set_domain();                                      // the country code stays set for the variants after it
+        if (v == 9 || v == 11) sb_ht = 1;
+        if (v == 10 || v == 11) sb_probes = 1;
         scan_ssid_len = (v == 6 || v == 7) ? 0 : nl;                        // 'ssid-off' and 'bare': wildcard scan
         if (v == 1) sb_no_rates = 1; if (v == 2) sb_no_gap = 1; if (v == 3) sb_no_bssmode = 1; if (v == 4) sb_passive = 1; if (v == 5) sb_min = 40;
         if (v == 6) sb_no_ssid = 1;
@@ -925,7 +953,7 @@ static int wifi_chan(const char *arg) {
         puts("| "); puts(ok ? "yes    " : "NO     "); put_dec(scan_events); puts("      "); put_dec(recs_seen); puts("    "); puts(hit ? "FOUND" : "-"); putc('\n');
         if (hit) { for (u32 k = 0; k < nap; k++) { puts("   "); puts(aps[k].ssid[0] ? aps[k].ssid : "(hidden)"); puts(" ch "); put_dec(aps[k].chan); puts(" -"); put_dec((u64)(aps[k].rssi < 0 ? -aps[k].rssi : aps[k].rssi)); putc('\n'); } }
     }
-    sb_no_bssmode = sb_no_ssid = sb_no_rates = sb_no_gap = sb_passive = sb_min = 0;
+    sb_no_bssmode = sb_no_ssid = sb_no_rates = sb_no_gap = sb_passive = sb_min = sb_ht = sb_probes = 0;
     wifi_event_hook = 0; scan_ssid_len = 0;
     return 1;
 }
