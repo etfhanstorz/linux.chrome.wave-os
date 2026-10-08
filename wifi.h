@@ -884,29 +884,31 @@ static int wifi_find(const char *name) {
     nap = 0; scan_events = 0; scan_bytes = 0; dbg_taken = 0; raw_taken = 0; ev_log = 0; recs_seen = 0; mb_fail = 0;
     wifi_event_hook = scan_event;
     have_target = 0;
-    puts("looking for "); puts(scan_ssid); puts(" on 2.4 GHz...\n");
-    scan_band(0, ch24, sizeof ch24);
+    char grp[10]; u32 gn = 0;
+    if (wifi_verbose) { puts("looking for "); puts(scan_ssid); puts(" on 2.4 GHz...\n"); }
+    grp[gn++] = scan_band(0, ch24, sizeof ch24) ? 'a' : '-';
     for (u32 i = 0; i < nap && !have_target; i++) if (streq(aps[i].ssid, scan_ssid)) { ap_copy(&target, &aps[i]); have_target = 1; }
     scan_cmd_ms = 4000;                                              // short wait: a 5 GHz group that gets no answer must not stall the whole search
     for (u32 i = 0; i < sizeof ch5 && !have_target; i += 4) {
         u32 n5 = sizeof ch5 - i < 4 ? sizeof ch5 - i : 4;
         u32 ev0 = scan_events;
-        puts("5g "); put_dec(ch5[i]); puts(": ");
         int ok5 = scan_band(1, ch5 + i, n5);
-        if (ok5) { puts("ok, "); put_dec(scan_events - ev0); puts(" events\n"); } else puts("NO ANSWER\n");
+        if (gn < 9) grp[gn++] = ok5 ? (scan_events > ev0 ? 'e' : 'a') : '-';
+        if (wifi_verbose) { puts("5g "); put_dec(ch5[i]); puts(ok5 ? ": ok\n" : ": NO ANSWER\n"); }
         for (u32 k = 0; k < nap && !have_target; k++) if (streq(aps[k].ssid, scan_ssid)) { ap_copy(&target, &aps[k]); have_target = 1; }
     }
     scan_cmd_ms = 10000;    wifi_event_hook = 0;
     scan_ssid_len = 0;
-    puts("events "); put_dec(scan_events); puts("  recs "); put_dec(recs_seen); putc('\n');
-    if (!have_target) { puts("not found: "); puts(scan_ssid); putc('\n'); return 0; }
-    puts("FOUND "); puts(target.ssid); puts("  ch "); put_dec(target.chan); puts("  -"); put_dec((u64)(target.rssi < 0 ? -target.rssi : target.rssi)); puts(" dBm  ");
-    puts(target.sec == 2 ? "WPA2" : target.sec == 1 ? "WPA" : target.sec == 3 ? "WEP?" : "open");
-    puts("  "); put_mac(target.bssid); putc('\n');
+    grp[gn] = 0;
+    if (!have_target) { puts("N "); puts(grp); putc('\n'); return 0; }      // N + one char per scan: - no answer, a answered, e got events
+    puts("F ch"); put_dec(target.chan); putc(' '); puts(target.sec == 2 ? "WPA2" : target.sec == 1 ? "WPA" : target.sec == 3 ? "WEP" : "open");
+    puts(" -"); put_dec((u64)(target.rssi < 0 ? -target.rssi : target.rssi)); putc('\n');
+    if (wifi_verbose) { puts("  "); put_mac(target.bssid); putc('\n'); }
     return 1;
 }
 // 802.11d domain info (command 0x005b): tells the chip the country and which channels are allowed there. ChromeOS sets this
 // (US); wave-os never did, which may be why the chip will not scan 5 GHz.
+static char dom_res = '?';
 static int wifi_set_domain(void) {
     static u8 b[2 + 4 + 3 + 3 * 8];
     static const u8 trip[][3] = {{1, 11, 30}, {36, 4, 23}, {52, 4, 23}, {100, 12, 23}, {149, 5, 30}};
@@ -917,7 +919,8 @@ static int wifi_set_domain(void) {
     for (u32 i = 0; i < nt; i++) { b[p++] = trip[i][0]; b[p++] = trip[i][1]; b[p++] = trip[i][2]; }
     u8 r[16]; u32 n = 0;
     int rc = wifi_cmd(0x005b, b, p, r, sizeof r, &n);
-    puts("  domain info (US): "); puts(rc == 0 ? "accepted\n" : rc > 0 ? "rejected\n" : "no answer\n");
+    dom_res = rc == 0 ? 'A' : rc > 0 ? 'R' : 'N';                    // A accepted, R rejected, N no answer
+    if (wifi_verbose) { puts("  domain info (US): "); putc(dom_res); putc('\n'); }
     return rc == 0;
 }
 // ---- v1.45: wifichan CH [NAME] = scan ONE 5 GHz channel with several variants of the scan command, to find which one the chip answers ----
@@ -934,7 +937,8 @@ static int wifi_chan(const char *arg) {
     u8 c1 = (u8)ch; u32 radio = ch >= 36 ? 1 : 0;
     static const char *names[] = {"as-is", "no-rates", "no-gap", "no-bssmode", "passive", "min40", "ssid-off", "bare", "domain", "domain+ht", "domain+probes", "all"};
     wifi_event_hook = scan_event;
-    puts("variant         | answer events recs found\n");
+    char res[13]; for (u32 q = 0; q < 12; q++) res[q] = '.'; res[12] = 0;
+    if (wifi_verbose) puts("variant         | answer events recs found\n");
     for (u32 v = 0; v < 12; v++) {
         sb_no_bssmode = sb_no_ssid = sb_no_rates = sb_no_gap = sb_passive = sb_min = sb_ht = sb_probes = 0;
         if (v == 8) wifi_set_domain();                                      // the country code stays set for the variants after it
@@ -949,12 +953,14 @@ static int wifi_chan(const char *arg) {
         int ok = scan_band(radio, &c1, 1);
         scan_cmd_ms = 10000;
         u32 hit = 0; for (u32 k = 0; k < nap; k++) if (nl ? streq(aps[k].ssid, scan_ssid) : aps[k].chan == ch) hit = 1;
-        { u32 l = 0; puts(names[v]); while (names[v][l]) l++; for (; l < 15; l++) putc(' '); }
-        puts("| "); puts(ok ? "yes    " : "NO     "); put_dec(scan_events); puts("      "); put_dec(recs_seen); puts("    "); puts(hit ? "FOUND" : "-"); putc('\n');
-        if (hit) { for (u32 k = 0; k < nap; k++) { puts("   "); puts(aps[k].ssid[0] ? aps[k].ssid : "(hidden)"); puts(" ch "); put_dec(aps[k].chan); puts(" -"); put_dec((u64)(aps[k].rssi < 0 ? -aps[k].rssi : aps[k].rssi)); putc('\n'); } }
+        res[v] = !ok ? '-' : hit ? 'F' : 'a';                               // - no answer, a answered, F found
+        if (wifi_verbose) { u32 l = 0; puts(names[v]); while (names[v][l]) l++; for (; l < 15; l++) putc(' ');
+            puts("| "); puts(ok ? "yes    " : "NO     "); put_dec(scan_events); puts("      "); put_dec(recs_seen); puts("    "); puts(hit ? "FOUND" : "-"); putc('\n'); }
+        if (wifi_verbose && hit) { for (u32 k = 0; k < nap; k++) { puts("   "); puts(aps[k].ssid[0] ? aps[k].ssid : "(hidden)"); puts(" ch "); put_dec(aps[k].chan); puts(" -"); put_dec((u64)(aps[k].rssi < 0 ? -aps[k].rssi : aps[k].rssi)); putc('\n'); } }
     }
     sb_no_bssmode = sb_no_ssid = sb_no_rates = sb_no_gap = sb_passive = sb_min = sb_ht = sb_probes = 0;
     wifi_event_hook = 0; scan_ssid_len = 0;
+    puts("R:"); puts(res); puts(" D:"); putc(dom_res); putc('\n');          // the whole result in one short line
     return 1;
 }
 // ---- v1.39: wifitry = scan with many read settings and print a scoreboard (looking for the setting that gets whole packets through) ----
