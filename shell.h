@@ -36,7 +36,7 @@ static void run_cmd(char *line) {
     u64 t_cmd = ticks();
     run_cmd2(line, arg);
     if (!streq(name, "prof")) prof_last_total = ticks() - t_cmd;
-    if ((name[0] == 'w' && name[1] == 'i') || streq(name, "update") || streq(name, "cryptotest") || streq(name, "netdemo") || streq(name, "ping") || streq(name, "rxtest") || streq(name, "up") || streq(name, "upset")) {   // one-line summary: command, what it says, error codes
+    if ((name[0] == 'w' && name[1] == 'i') || streq(name, "update") || streq(name, "cryptotest") || streq(name, "netdemo") || streq(name, "ping") || streq(name, "rxtest") || streq(name, "rdcfg") || streq(name, "up") || streq(name, "upset")) {   // one-line summary: command, what it says, error codes
         u32 keep = con_fg;                                            // coloured: green = fine, red = errors
         con_fg = cmd_codes_n ? 0xFF6060 : 0x60FF80; outs("> "); con_fg = 0x40E0FF; outs(name); out(' ');
         con_fg = cmd_codes_n ? 0xFFE040 : C_TEXT;
@@ -47,7 +47,7 @@ static void run_cmd(char *line) {
     }
 }
 static void run_cmd2(char *line, char *arg) {
-    if (streq(line, "help")) outs("commands: c f j k r up upset ping rxtest opt prof wifi5 wifijoin wificonnect help version info echo color clear errors wifi wifion wififw wifiinit netdemo update wifichan wififind wifitry wifiv wifigap wifidiv wifiscan wifiscanm wifiscanblk wifiscan5 cryptotest reboot\n");
+    if (streq(line, "help")) outs("commands: c f j k r up upset ping rxtest rdcfg opt prof wifi5 wifijoin wificonnect help version info echo color clear errors wifi wifion wififw wifiinit netdemo update wifichan wififind wifitry wifiv wifigap wifidiv wifiscan wifiscanm wifiscanblk wifiscan5 cryptotest reboot\n");
     else if (streq(line, "version")) outs(VERSION "\n");
     else if (streq(line, "info")) cmd_info();
     else if (streq(line, "echo")) { outs(arg); out('\n'); }
@@ -69,6 +69,7 @@ static void run_cmd2(char *line, char *arg) {
     else if (streq(line, "wificonnect")) wifi_connect(*arg ? arg : "HomeWifi");
     else if (streq(line, "ping")) wifi_ping(arg);
     else if (streq(line, "rxtest")) wifi_rxtest();
+    else if (streq(line, "rdcfg")) wifi_rdcfg(arg);
     else if (streq(line, "opt")) { if (*arg >= '0' && *arg <= '9') opt_toggle(*arg - '0'); opt_list(); }
     else if (streq(line, "prof")) {
         outs("P "); u64 tot = 0;

@@ -8,6 +8,7 @@
 static u8 dbuf[2312 + 256 + 256];         // one received data packet (SDIO header + rx descriptor + frame)
 static u32 rd_cur_port, wr_cur_port;      // next data port to read / write (rolling, like Linux curr_rd_port / curr_wr_port)
 static u32 rx_pkts, rx_eapol, rx_other, rx_errs, rx_events;
+static u32 rx_last_off, rx_last_len;      // rx descriptor offset and SDIO length of the last data packet (rxtest prints them)
 static u16 rx_first_type; static u8 rx_first_info[32]; static u32 rx_first_len;
 static int joined; static u8 join_aid;
 static u8 our_rsn[22];                  // the RSN element we sent when associating (the handshake repeats it in message 2)
@@ -37,6 +38,7 @@ static int wifi_data_poll(u8 **frame, u32 *flen) {
     if (get16(dbuf + 2) != 0) { rx_other++; return 0; }          // not a data packet
     u32 pkt_len = get16(dbuf + 4 + 2), off = get16(dbuf + 4 + 4);   // rx descriptor: frame length, offset of the frame from the descriptor
     if (off < 16 || off > 200 || 4 + off + 14 > len) { rx_errs++; return -1; }
+    rx_last_off = off; rx_last_len = len;
     u8 *f = dbuf + 4 + off;
     u32 fl = pkt_len;
     if (4 + off + fl > len) fl = len - 4 - off;

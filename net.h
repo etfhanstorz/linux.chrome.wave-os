@@ -80,19 +80,23 @@ static void tcp_input(const u8 *src_mac, u32 src_ip, const u8 *seg, u32 len);
 static u32 net_bad_ip, net_bad_l4, net_good_frames;
 static u32 rxtest_on;                                          // rxtest: keep and measure damaged pings instead of dropping them
 #define RXT_MAX 8
-static struct { u32 len, ok, bad, first_min, nbad_max; } rxt[RXT_MAX]; static u32 rxt_n, rxt_bad_ip;
+static struct { u32 len, ok, bad, first_min, nbad_max, zeros; u8 got[8]; } rxt[RXT_MAX]; static u32 rxt_n, rxt_bad_ip, rxt_last_tick_ok;
 static u32 l4_ok(u32 proto, u32 src, u32 dst, const u8 *p, u32 plen) {
     u8 ph[12]; be32w(ph, src); be32w(ph + 4, dst); ph[8] = 0; ph[9] = (u8)proto; be16w(ph + 10, plen);
     return csum(p, plen, csum(ph, 12, 0)) == 0xffff;
 }
 // Windows `ping -l N` fills the payload with abcdefghijklmnopqrstuvw repeated: compare it, report the first wrong offset and how many bytes are wrong
 static void rxtest_note(const u8 *echo, u32 plen, u32 ip_good) {
-    u32 n = plen - 8, first = 0xffffffff, nbad = 0;
-    for (u32 i = 0; i < n; i++) if (echo[8 + i] != 'a' + i % 23) { if (first == 0xffffffff) first = i; nbad++; }
+    u32 n = plen - 8, first = 0xffffffff, nbad = 0, zeros = 0;
+    for (u32 i = 0; i < n; i++) if (echo[8 + i] != 'a' + i % 23) { if (first == 0xffffffff) first = i; nbad++; if (!echo[8 + i]) zeros++; }
     u32 k = 0; while (k < rxt_n && rxt[k].len != n) k++;
-    if (k == rxt_n) { if (rxt_n == RXT_MAX) return; rxt[k].len = n; rxt[k].ok = rxt[k].bad = 0; rxt[k].first_min = 0xffffffff; rxt[k].nbad_max = 0; rxt_n++; }
+    if (k == rxt_n) { if (rxt_n == RXT_MAX) return; rxt[k].len = n; rxt[k].ok = rxt[k].bad = 0; rxt[k].first_min = 0xffffffff; rxt[k].nbad_max = 0; rxt[k].zeros = 0; rxt_n++; }
     if (!ip_good) rxt_bad_ip++;
-    if (nbad || csum(echo, plen, 0) != 0xffff) { rxt[k].bad++; if (first < rxt[k].first_min) rxt[k].first_min = first; if (nbad > rxt[k].nbad_max) rxt[k].nbad_max = nbad; }
+    if (nbad || csum(echo, plen, 0) != 0xffff) {
+        rxt[k].bad++;
+        if (first < rxt[k].first_min) { rxt[k].first_min = first; rxt[k].zeros = zeros; for (u32 i = 0; i < 8; i++) rxt[k].got[i] = first + i < n ? echo[8 + first + i] : 0; }
+        if (nbad > rxt[k].nbad_max) rxt[k].nbad_max = nbad;
+    }
     else rxt[k].ok++;
 }
 

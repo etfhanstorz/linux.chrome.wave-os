@@ -51,7 +51,11 @@ static int wave_update(const char *arg) {
     u8 *img = (u8 *)UPDATE_ADDR;
     u64 t0 = ticks();
     n = http_get(update_srv, 8000, host, "/Image", img, UPDATE_MAX, 60000);
-    if (n < 0) { puts("  image download failed ("); put_dec((u64)-n); puts(")\n"); err("NET", 23, "update: could not download the image"); return 0; }
+    if (n < 0) {
+        puts("  image download failed ("); put_dec((u64)-n); puts(")\n");
+        puts("  got "); put_dec(tcp.got); puts(" of "); put_dec(size); puts(" bytes in "); put_dec(tcp.segs); puts(" segments; damaged packets dropped: "); put_dec(net_bad_ip + net_bad_l4); puts("\n");
+        err("NET", 23, "update: could not download the image"); return 0;
+    }
     puts("  downloaded "); put_dec((u64)n); puts(" bytes in "); put_dec((ticks() - t0) * 1000 / tick_hz()); puts(" ms, damaged packets dropped: "); put_dec(net_bad_ip + net_bad_l4); putc('\n');
     if ((u32)n != size) { err("NET", 24, "update: the image size does not match the manifest"); return 0; }
     u8 sha[32], mac[32];

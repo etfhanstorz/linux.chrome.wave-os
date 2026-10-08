@@ -222,16 +222,39 @@ static int wifi_rxtest(void) {
     if (!net_ip) { errs("NET", 1, 1, "not connected: run k (wificonnect) first"); sum_s("not connected"); return 0; }
     rxt_n = 0; rxt_bad_ip = 0; net_bad_ip = net_bad_l4 = 0; rxtest_on = 1;
     puts("rxtest: on the PC run  ping -n 10 -l 1400 "); put_ip(net_ip); puts("   (listening 40 s)\n");
-    u64 hz = tick_hz(), t0 = ticks();
-    while (hz && ticks() - t0 < hz * 40) { net_poll(); wdt_kick(); }
+    u64 hz = tick_hz(), t0 = ticks(), last = 0; u32 seen = 0;
+    while (hz && ticks() - t0 < hz * 40) {
+        net_poll(); wdt_kick();
+        u32 now = 0; for (u32 k = 0; k < rxt_n; k++) now += rxt[k].ok + rxt[k].bad;
+        if (now != seen) { seen = now; last = ticks(); }
+        if (seen && ticks() - last > hz * 4) break;                 // pings stopped: finish early
+    }
     rxtest_on = 0;
     u32 tot_ok = 0, tot_bad = 0;
     for (u32 k = 0; k < rxt_n; k++) {
         puts("  size "); put_dec(rxt[k].len); puts(": ok "); put_dec(rxt[k].ok); puts(" bad "); put_dec(rxt[k].bad);
-        if (rxt[k].bad) { puts("  first wrong byte at "); put_dec(rxt[k].first_min); puts(", up to "); put_dec(rxt[k].nbad_max); puts(" bytes wrong"); }
+        if (rxt[k].bad) {
+            puts("  first wrong byte at "); put_dec(rxt[k].first_min); puts(", up to "); put_dec(rxt[k].nbad_max); puts(" wrong, "); put_dec(rxt[k].zeros); puts(" of them 0; got:");
+            for (u32 i = 0; i < 8; i++) { putc(' '); putc("0123456789abcdef"[rxt[k].got[i] >> 4]); putc("0123456789abcdef"[rxt[k].got[i] & 15]); }
+        }
         putc('\n'); tot_ok += rxt[k].ok; tot_bad += rxt[k].bad;
     }
+    puts("  last packet: chip length "); put_dec(rx_last_len); puts(", frame offset "); put_dec(rx_last_off); puts(";  read settings: chunk "); put_dec(rd_chunk); puts(" gap "); put_dec(rd_gap_us); puts(" div "); put_dec(rd_div); putc('\n');
     sum_s("ok "); sum_u(tot_ok); sum_s(" bad "); sum_u(tot_bad);
     if (rxt_bad_ip) { sum_s(" iphdr-bad "); sum_u(rxt_bad_ip); }
+    return 1;
+}
+// rdcfg [CHUNK [GAP [DIV]]]: how the chip's packets are read (bytes per bus transfer 4..512, pause between transfers in microseconds, bus clock divider 0 = unchanged).
+// Change it, run rxtest again, compare: finds the setting that gets whole packets through.
+static u32 parse_num(const char **s) { u32 v = 0; while (**s == ' ') (*s)++; while (**s >= '0' && **s <= '9') { v = v * 10 + (**s - '0'); (*s)++; } return v; }
+static int wifi_rdcfg(const char *arg) {
+    const char *s = arg;
+    if (*s) {
+        u32 c = parse_num(&s); if (c >= 4 && c <= 512) rd_chunk = c & ~3u;
+        while (*s == ' ') s++;
+        if (*s) { rd_gap_us = parse_num(&s); while (*s == ' ') s++; if (*s) rd_div = parse_num(&s); }
+    }
+    puts("read settings: chunk "); put_dec(rd_chunk); puts(" gap "); put_dec(rd_gap_us); puts(" div "); put_dec(rd_div); putc('\n');
+    sum_s("chunk "); sum_u(rd_chunk); sum_s(" gap "); sum_u(rd_gap_us); sum_s(" div "); sum_u(rd_div);
     return 1;
 }
