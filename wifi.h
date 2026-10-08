@@ -334,6 +334,7 @@ static int sdio_read_port1(u32 addr, u8 *out, u32 blocks) {
 // single-block reads always work). The port is a FIFO, so read a packet one 256-byte block at a time instead.
 static u32 rd_total;                     // bytes of the current packet that arrived before a failure
 static u32 mb_err, mb_got, mb_hw, mb_fail;   // last failed multi-block read: controller error, bytes that arrived, hardware timeout?
+static u32 rd_gap_us = 1000;             // pause between pieces of one packet (see sdio_read_port)
 static int wifi_verbose;                 // 1 = also print the long scan diagnostics (command: wifiv)
 static int wifi_read_bytes = 1;          // 1 = read a packet in BYTE mode (up to 512 bytes per transfer; clean on hana), 0 = as 256-byte blocks (garbled results on hana)
 static u32 dbg_starts[8], dbg_blocks, dbg_taken;   // first 4 bytes of each 256-byte block of the first big packet (scan diagnostics)
@@ -382,6 +383,7 @@ static int sdio_read_port(u32 addr, u8 *out, u32 blocks) {
             int e = sdio_read_bytes_once(addr, out + off, n);
             if (e) { fail = e; break; }
             rd_total += n;
+            if (off + n < len) delay_us(rd_gap_us);                          // v1.36 on hana: bytes after the first 1024 of a packet were garbage; give the chip time between pieces
         }
         if (fail) return fail;
     } else if (wifi_read_bytes == 2) {                                         // EXPERIMENT: the whole packet in ONE multi-block transfer
