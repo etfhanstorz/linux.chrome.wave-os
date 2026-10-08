@@ -7,16 +7,18 @@ $ErrorActionPreference = 'Stop'
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin -and -not $DryRun) {
     $log = Join-Path $PSScriptRoot 'flash-launch.log'
+    $launched = $false
     try {
-        $args2 = @('-NoExit', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"", '-Image', $Image)
+        $args2 = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"", '-Image', $Image)
         Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList $args2 -ErrorAction Stop
         "$(Get-Date) launched elevated flasher for $Image" | Out-File $log
+        $launched = $true
         Write-Host "The admin flasher window should now be open. Continue there."
     } catch {
         "$(Get-Date) FAILED to launch elevated: $_" | Out-File $log
         Write-Host "`nCould not open the admin window: $_" -ForegroundColor Red
     }
-    exit 0
+    exit $(if ($launched) { 0 } else { 1 })
 }
 
 try { Start-Transcript -Path (Join-Path $PSScriptRoot 'flash.log') -Force | Out-Null } catch {}
@@ -52,8 +54,8 @@ Write-Host "Other partitions on the stick are NOT touched.`n"
 
 if ($DryRun) { Write-Host "Dry run: nothing written." -ForegroundColor Green; try { Stop-Transcript | Out-Null } catch {}; Read-Host "`nPress Enter to close"; exit 0 }
 
-$ans = Read-Host "Type YES to write wave-os to Disk $($disk.Number) now"
-if ($ans -cne 'YES') { Stop-Here "Cancelled. Nothing was written." }
+$ans = Read-Host "Type yes (or y) to write wave-os to Disk $($disk.Number) now"
+if ($ans.Trim() -notmatch '^(y|yes)$') { Stop-Here "Cancelled. Nothing was written." }
 
 $path = "\\.\PhysicalDrive$($disk.Number)"
 $fs = New-Object IO.FileStream($path, [IO.FileMode]::Open, [IO.FileAccess]::ReadWrite, [IO.FileShare]::ReadWrite, 4096, [IO.FileOptions]::WriteThrough)
@@ -70,4 +72,4 @@ try {
 if ($read -ne $padded.Length -or [Convert]::ToBase64String($back) -ne [Convert]::ToBase64String($padded)) { Stop-Here "Write verification FAILED. Do not use this stick; run again." }
 Write-Host "`nDONE. Verified $($padded.Length) bytes written." -ForegroundColor Green
 Write-Host "Eject the stick, plug it into the Chromebook, reboot, and press Ctrl+U at the screen."; try { Stop-Transcript | Out-Null } catch {}
-Read-Host "`nPress Enter to close"
+Start-Sleep -Seconds 3   # window closes by itself

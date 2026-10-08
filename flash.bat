@@ -9,5 +9,4 @@ if errorlevel 1 (
 )
 echo Build ok. Starting the flasher (Windows will ask for admin to write to the USB stick)...
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0flash.ps1" -Image out.kpart
-echo.
-pause
+if errorlevel 1 pause

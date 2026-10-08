@@ -910,7 +910,13 @@ static int wifi_find(const char *name) {
 }
 // 802.11d domain info (command 0x005b): tells the chip the country and which channels are allowed there. ChromeOS sets this
 // (US); wave-os never did, which may be why the chip will not scan 5 GHz.
-static char dom_res = '?';
+static char dom_res = '?', snmp_res = '?';
+// SNMP MIB set (command 0x0016): {action 1 = set, oid, size 2, value}. oid 9 = 802.11d on, 10 = 802.11h on (Linux enables 11d before the domain info).
+static int wifi_snmp(u16 oid, u16 val) {
+    u8 b[8], r[16]; u32 n = 0;
+    put16(b, 1); put16(b + 2, oid); put16(b + 4, 2); put16(b + 6, val);
+    return wifi_cmd(0x0016, b, 8, r, sizeof r, &n);
+}
 static int wifi_set_domain(void) {
     static u8 b[2 + 4 + 3 + 3 * 8];
     static const u8 trip[][3] = {{1, 11, 30}, {36, 4, 23}, {52, 4, 23}, {100, 12, 23}, {149, 5, 30}};
@@ -937,22 +943,28 @@ static int wifi_chan(const char *arg) {
     u8 r[8]; u32 n = 0; static const u8 macctl[6] = {0x13, 0x00, 0x00, 0x00, 0x00, 0x00};
     wifi_cmd(0x0028, macctl, sizeof macctl, r, sizeof r, &n);
     u8 c1 = (u8)ch; u32 radio = ch >= 36 ? 1 : 0;
-    static const char *names[] = {"as-is", "no-rates", "no-gap", "no-bssmode", "passive", "min40", "ssid-off", "bare", "domain", "domain+ht", "domain+probes", "all"};
+    static const char *names[] = {"as-is", "dom", "11d", "11d+dom", "11d+dom+11h", "region", "11d+dom+reg", "bare", "ch6", "ch36", "ch149", "min40"};
+    static const u8 pre[12] = {0, 1, 2, 3, 7, 8, 11, 3, 3, 3, 3, 3};          // setup before the scan: 1 domain info, 2 enable 11d, 4 enable 11h, 8 read channel region
     wifi_event_hook = scan_event;
     char res[13]; for (u32 q = 0; q < 12; q++) res[q] = '.'; res[12] = 0;
     if (wifi_verbose) puts("variant         | answer events recs found\n");
     for (u32 v = 0; v < 12; v++) {
         sb_no_bssmode = sb_no_ssid = sb_no_rates = sb_no_gap = sb_passive = sb_min = sb_ht = sb_probes = 0;
-        if (v == 9 || v == 11) sb_ht = 1;
-        if (v == 10 || v == 11) sb_probes = 1;
-        scan_ssid_len = (v == 6 || v == 7) ? 0 : nl;                        // 'ssid-off' and 'bare': wildcard scan
-        if (v == 1) sb_no_rates = 1; if (v == 2) sb_no_gap = 1; if (v == 3) sb_no_bssmode = 1; if (v == 4) sb_passive = 1; if (v == 5) sb_min = 40;
-        if (v == 6) sb_no_ssid = 1;
+        scan_ssid_len = v == 7 ? 0 : nl;                                    // 'bare': wildcard scan
         if (v == 7) { sb_no_ssid = sb_no_rates = sb_no_gap = sb_no_bssmode = 1; }
+        if (v == 11) sb_min = 40;
+        c1 = (u8)ch; radio = ch >= 36 ? 1 : 0;
+        if (v == 8) { c1 = 6; radio = 0; } if (v == 9) { c1 = 36; radio = 1; } if (v == 10) { c1 = 149; radio = 1; }
         nap = 0; scan_events = 0; scan_bytes = 0; dbg_taken = 0; raw_taken = 0; ev_log = 0; recs_seen = 0; mb_fail = 0;
         scan_cmd_ms = 3500; wdt_kick();
-        if (v && scan_last_rc < 0 && !wifi_init()) { res[v] = 'x'; break; }  // the last scan left the chip silent: restart it so every variant gets a fresh chip
-        if (v == 8) wifi_set_domain();                                      // the country code stays set for the variants after it
+        if (v) {                                                            // every variant starts on a freshly restarted chip
+            if (!wifi_init()) { res[v] = 'x'; break; }
+            wifi_cmd(0x0028, macctl, sizeof macctl, r, sizeof r, &n);
+        }
+        if (pre[v] & 2) { int sr = wifi_snmp(9, 1); snmp_res = sr == 0 ? 'A' : sr > 0 ? (sr < 10 ? '0' + sr : '+') : 'N'; }
+        if (pre[v] & 1) wifi_set_domain();
+        if (pre[v] & 4) wifi_snmp(10, 1);
+        if (pre[v] & 8) { static const u8 rg[2] = {0, 0}; wifi_cmd(0x0242, rg, 2, r, sizeof r, &n); }
         int ok = scan_band(radio, &c1, 1);
         scan_cmd_ms = 10000;
         u32 hit = 0; for (u32 k = 0; k < nap; k++) if (nl ? streq(aps[k].ssid, scan_ssid) : aps[k].chan == ch) hit = 1;
@@ -963,7 +975,7 @@ static int wifi_chan(const char *arg) {
     }
     sb_no_bssmode = sb_no_ssid = sb_no_rates = sb_no_gap = sb_passive = sb_min = sb_ht = sb_probes = 0;
     wifi_event_hook = 0; scan_ssid_len = 0;
-    sum_s("R:"); sum_s(res); sum_s(" D:"); sum_c(dom_res);                // the shell prints this on the one-line summary
+    sum_s("R:"); sum_s(res); sum_s(" D:"); sum_c(dom_res); sum_s(" S:"); sum_c(snmp_res);   // the shell prints this on the one-line summary
     return 1;
 }
 // ---- v1.39: wifitry = scan with many read settings and print a scoreboard (looking for the setting that gets whole packets through) ----
