@@ -961,7 +961,7 @@ static int wifi_chan(const char *arg) {
     u32 ch = 0; u32 i = 0;
     while (arg[i] >= '0' && arg[i] <= '9') ch = ch * 10 + (arg[i++] - '0');
     while (arg[i] == ' ') i++;
-    if (!ch) { puts("usage: wifichan CHANNEL [NAME]   e.g. wifichan 157 HomeWifi\n"); return 0; }
+    if (!ch) { puts("usage: wifichan CHANNEL [NAME]   e.g. wifichan 157 " WIFI_DEFAULT_SSID "\n"); return 0; }
     u32 nl = 0; while (arg[i + nl] && nl < 32) { scan_ssid[nl] = arg[i + nl]; nl++; }
     scan_ssid[nl] = 0;
     if (!wifi_ready && !wifi_init()) return 0;
@@ -1022,7 +1022,7 @@ static int wifi_5g(const char *arg) {
     while (arg[i] == ' ') i++;
     if (!ch) ch = 157;
     u32 nl = 0; while (arg[i + nl] && nl < 32) { scan_ssid[nl] = arg[i + nl]; nl++; }
-    if (!nl) { const char *d = "HomeWifi"; while (d[nl]) { scan_ssid[nl] = d[nl]; nl++; } }
+    if (!nl) { const char *d = WIFI_DEFAULT_SSID; while (d[nl]) { scan_ssid[nl] = d[nl]; nl++; } }
     scan_ssid[nl] = 0;
     if (!wifi_init()) return 0;                                      // always a freshly started chip: an earlier scan that hung would otherwise ruin this one
     u8 r[8]; u32 n = 0; static const u8 macctl[6] = {0x13, 0x00, 0x00, 0x00, 0x00, 0x00};
@@ -1038,10 +1038,10 @@ static int wifi_5g(const char *arg) {
     for (u32 g = 0; g < ncs; g += 4) { u32 ng = ncs - g < 4 ? ncs - g : 4; if (scan_band(1, cs + g, ng)) ok = 1; wdt_kick(); }
     sb_max = 110; sb_passive = 0; scan_ssid_len = 0; scan_cmd_ms = 10000; wifi_event_hook = 0;
     u32 hit = 0; for (u32 k = 0; k < nap; k++) if (streq(aps[k].ssid, scan_ssid)) hit = 1;
-    static const u8 home_mac[6] = {0x02, 0x11, 0x22, 0x33, 0x44, 0x55};          // HomeWifi's address, from ChromeOS (chrome://network)
+    static const u8 home_mac[6] = WIFI_DEFAULT_BSSID;                              // our router's address (wifi_local.h)
     u32 bss_exact = 0, bss_oui = 0, on157 = 0;
     for (u32 k = 0; k < nap; k++) {
-        u32 pre = aps[k].bssid[0] == 0x02 && aps[k].bssid[1] == 0x11 && aps[k].bssid[2] == 0x22;
+        u32 pre = aps[k].bssid[0] == home_mac[0] && aps[k].bssid[1] == home_mac[1] && aps[k].bssid[2] == home_mac[2];
         u32 ex = pre; for (u32 m = 3; m < 6; m++) if (aps[k].bssid[m] != home_mac[m]) ex = 0;
         if (ex) bss_exact = 1; else if (pre) bss_oui = 1;
         if (aps[k].chan == 157) on157++;

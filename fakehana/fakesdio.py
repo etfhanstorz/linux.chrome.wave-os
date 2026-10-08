@@ -5,6 +5,7 @@ the way the real board needs: bus supply VGP3 on (MT6397 DIGLDO_CON7 bit 15) and
 driven high in GPIO mode. Otherwise every command times out (MSDC_INT CMDTMO), like an empty slot.
 """
 import struct
+import localcfg
 
 # Tiny CIS chains: CISTPL_MANFID (0x20) with Marvell's vendor id 0x02df. Like the real hana chip
 # (measured by v1.2): the card (function 0) says 0x912c; the Wi-Fi function (1) says 0x912d.
@@ -161,7 +162,7 @@ class FakeFirmwareLoader:
             ok = bool(chans) and all(m & 2 for _, _, m in chans) and result == 0       # the channel filter must be disabled
             allaps = [(b'HomeNet', '02:11:22:33:44:01', -52, 6, True), (b'CoffeeShop-Guest', '02:11:22:33:44:02', -71, 1, False),
                       (b'Neighbour5G', '02:11:22:33:44:03', -80, 149, True), (b'', '02:11:22:33:44:04', -85, 11, True),
-                      (b'HomeWifi', '02:11:22:33:44:55', -62, 157, True)]
+                      (localcfg.SSID, ':'.join('%02x' % b for b in localcfg.BSSID), -62, 157, True)]
 
             def mk(ssid, mac, rssi, ch, sec):
                 chan_ie = bytes([3, 1, ch]) if ch < 36 else bytes([61, 22, ch]) + bytes(21)       # 5 GHz beacons carry the channel in the HT operation element, not in a DS parameter set
@@ -183,7 +184,7 @@ class FakeFirmwareLoader:
             peer = bytes(d[12:18]); tlvs = {}; p = 12 + 13
             while p + 4 <= 12 + max(13, size - 8):
                 tt, tl = struct.unpack_from('<HH', d, p); tlvs[tt] = bytes(d[p + 4:p + 4 + tl]); p += 4 + tl
-            good = peer == bytes.fromhex('021122334455') and tlvs.get(0) == b'HomeWifi' and len(tlvs.get(48, b'')) == 20 and tlvs.get(0x0101, b'')[:2] == bytes([1, 157])
+            good = peer == localcfg.BSSID and tlvs.get(0) == localcfg.SSID and len(tlvs.get(48, b'')) == 20 and tlvs.get(0x0101, b'')[:2] == bytes([1, 157])
             status = 0 if good else 1
             body = struct.pack('<HHH', 0x0411, status, 0xc001 if good else 0)
             if good:

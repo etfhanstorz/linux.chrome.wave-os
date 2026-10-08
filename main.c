@@ -68,6 +68,7 @@ static void fill(const struct fb *f, u32 rgb) {
 #include "probe.h"
 #include "display.h"
 #include "crypto.h"
+#include "wifi_local.h"                              // WIFI_DEFAULT_SSID / WIFI_DEFAULT_BSSID: your own network (git-ignored)
 #include "wifi.h"
 #include "join.h"
 #include "net.h"

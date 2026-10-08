@@ -23,3 +23,5 @@ update_key.txt
 update_key.h
 wave-log.txt
 pc_addr.h
+wifi_local.h
+*.log

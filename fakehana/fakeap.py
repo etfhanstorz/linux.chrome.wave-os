@@ -1,14 +1,15 @@
 """A fake WPA2-PSK router for the fake Chromebook: runs the router's half of the 4-way handshake with real cryptography
 (PBKDF2 / PRF / HMAC-SHA1 / RFC 3394 key wrap), so wave-os's password handling is checked end to end.
 
-Network "HomeWifi", password PASSWORD below (a test value, only used inside the fake). A wrong password makes the router
+Network = the name in wifi_local.h, password PASSWORD below (a test value, only used inside the fake). A wrong password makes the router
 ignore message 2 (bad signature), exactly like a real one, so the host times out waiting for message 3.
 """
 import hashlib, hmac, struct
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
-AP_MAC = bytes.fromhex('021122334455')
-SSID = b'HomeWifi'
+import localcfg
+AP_MAC = localcfg.BSSID
+SSID = localcfg.SSID
 PASSWORD = b'wavetest1234'
 RSN_IE = bytes([48, 20, 1, 0, 0, 0x0f, 0xac, 4, 1, 0, 0, 0x0f, 0xac, 4, 1, 0, 0, 0x0f, 0xac, 2, 0, 0])
 

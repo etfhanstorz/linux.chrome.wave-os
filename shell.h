@@ -25,11 +25,11 @@ static void run_cmd(char *line) {
     while (*arg && *arg != ' ') arg++;
     if (*arg) { *arg++ = 0; while (*arg == ' ') arg++; }
     if (!*line) return;
-    static char al_arg[24];                                            // short aliases for the long test commands: c = wifichan 157 HomeWifi, f = wififind HomeWifi
-    if (streq(line, "c")) { line = "wifichan"; const char *a = "157 HomeWifi"; u32 q = 0; while ((al_arg[q] = a[q])) q++; arg = al_arg; }
-    else if (streq(line, "k")) { line = "wificonnect"; const char *a = "HomeWifi"; u32 q = 0; while ((al_arg[q] = a[q])) q++; arg = al_arg; }
-    else if (streq(line, "j")) { line = "wifijoin"; const char *a = "HomeWifi"; u32 q = 0; while ((al_arg[q] = a[q])) q++; arg = al_arg; }
-    else if (streq(line, "f")) { line = "wififind"; const char *a = "HomeWifi"; u32 q = 0; while ((al_arg[q] = a[q])) q++; arg = al_arg; }
+    static char al_arg[48];                                            // short aliases for the long test commands: c = wifichan 157 HomeWifi, f = wififind HomeWifi
+    if (streq(line, "c")) { line = "wifichan"; const char *a = "157 " WIFI_DEFAULT_SSID; u32 q = 0; while ((al_arg[q] = a[q])) q++; arg = al_arg; }
+    else if (streq(line, "k")) { line = "wificonnect"; const char *a = WIFI_DEFAULT_SSID; u32 q = 0; while ((al_arg[q] = a[q])) q++; arg = al_arg; }
+    else if (streq(line, "j")) { line = "wifijoin"; const char *a = WIFI_DEFAULT_SSID; u32 q = 0; while ((al_arg[q] = a[q])) q++; arg = al_arg; }
+    else if (streq(line, "f")) { line = "wififind"; const char *a = WIFI_DEFAULT_SSID; u32 q = 0; while ((al_arg[q] = a[q])) q++; arg = al_arg; }
     char name[16]; { u32 q = 0; while (line[q] && q < 15) { name[q] = line[q]; q++; } name[q] = 0; }
     if (!streq(name, "prof")) prof_reset();
     sum_reset();
@@ -66,8 +66,8 @@ static void run_cmd2(char *line, char *arg) {
     else if (streq(line, "upset")) wave_upset(arg);
     else if (streq(line, "wifichan")) wifi_chan(arg);
     else if (streq(line, "wifi5")) wifi_5g(arg);
-    else if (streq(line, "wifijoin")) wifi_join(*arg ? arg : "HomeWifi");
-    else if (streq(line, "wificonnect")) wifi_connect(*arg ? arg : "HomeWifi");
+    else if (streq(line, "wifijoin")) wifi_join(*arg ? arg : WIFI_DEFAULT_SSID);
+    else if (streq(line, "wificonnect")) wifi_connect(*arg ? arg : WIFI_DEFAULT_SSID);
     else if (streq(line, "ping")) wifi_ping(arg);
     else if (streq(line, "rxtest")) wifi_rxtest();
     else if (streq(line, "rdcfg")) wifi_rdcfg(arg);

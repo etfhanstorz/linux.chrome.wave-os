@@ -9,6 +9,8 @@ python3 - <<'EOF'
 k = open('update_key.txt').read().strip()
 open('update_key.h', 'w').write('static const unsigned char update_key[16] = {%s};\n' % ', '.join('0x' + k[i:i+2] for i in range(0, 32, 2)))
 EOF
+# Your own network's name and router address live in wifi_local.h (git-ignored); the first build starts it from the published placeholder.
+[ -f wifi_local.h ] || cp wifi_local.example.h wifi_local.h
 # This PC's address (the Chromebook's `up` command fetches updates from it). Detected on every build; 0.0.0.0 if it cannot be found.
 PCIP=$(powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(wslpath -w tools/pcaddr.ps1)" 2>/dev/null | tr -d '\r' | head -1)
 python3 - "$PCIP" <<'EOF'
