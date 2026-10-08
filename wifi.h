@@ -792,7 +792,8 @@ static int scan_band(u32 radio, const u8 *chans, u32 nch) {
     }
     put16(body + p, 0x0101); put16(body + p + 2, nch * 6); p += 4;                       // channel list TLV
     for (u32 i = 0; i < nch; i++) {
-        body[p] = radio; body[p + 1] = chans[i]; body[p + 2] = 0x02;                      // active, channel filter disabled
+        body[p] = radio; body[p + 1] = chans[i];
+        body[p + 2] = (radio && chans[i] >= 52 && chans[i] <= 144) ? 0x13 : 0x02;          // DFS channels: passive + hidden-SSID report + no filter; others: active, no filter (Linux MWIFIEX_*_SCAN bits)
         put16(body + p + 3, 0); put16(body + p + 5, 110); p += 6;
     }
     const u8 *rt = radio ? rates5 : rates24; u32 rn = radio ? sizeof rates5 : sizeof rates24;
@@ -817,7 +818,7 @@ static int wifi_scan(int with5) {
     int rc = wifi_cmd(0x0028, macctl, sizeof macctl, r, sizeof r, &n);
     if (rc > 0) puts("  (MAC_CONTROL rejected; continuing)\n");
     static const u8 ch24[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
-    static const u8 ch5[] = {36, 40, 44, 48, 149, 153, 157, 161, 165};
+    static const u8 ch5[] = {36, 40, 44, 48, 52, 56, 60, 64, 100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140, 144, 149, 153, 157, 161, 165};   // all US 5 GHz channels (52-144 are DFS: passive listening only)
     nap = 0; scan_events = 0; scan_bytes = 0; dbg_taken = 0; raw_taken = 0; ev_log = 0; recs_seen = 0; mb_fail = 0;
     wifi_event_hook = scan_event;
     puts("scanning 2.4 GHz...\n");
@@ -866,7 +867,7 @@ static int wifi_find(const char *name) {
     static const u8 macctl[6] = {0x13, 0x00, 0x00, 0x00, 0x00, 0x00};
     wifi_cmd(0x0028, macctl, sizeof macctl, r, sizeof r, &n);
     static const u8 ch24[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
-    static const u8 ch5[] = {36, 40, 44, 48, 149, 153, 157, 161, 165};
+    static const u8 ch5[] = {36, 40, 44, 48, 52, 56, 60, 64, 100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140, 144, 149, 153, 157, 161, 165};   // all US 5 GHz channels (52-144 are DFS: passive listening only)
     nap = 0; scan_events = 0; scan_bytes = 0; dbg_taken = 0; raw_taken = 0; ev_log = 0; recs_seen = 0; mb_fail = 0;
     wifi_event_hook = scan_event;
     have_target = 0;
