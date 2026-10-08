@@ -61,13 +61,14 @@ static void fill(const struct fb *f, u32 rgb) {
 
 #include "rlog.h"
 #include "console.h"
-#define VERSION "wave-os v1.42"
+#define VERSION "wave-os v1.43"
 #include "err.h"
 #include "sys.h"
 #include "probe.h"
 #include "display.h"
 #include "crypto.h"
 #include "wifi.h"
+#include "net.h"
 #include "ec.h"
 #include "shell.h"
 #ifdef QEMU

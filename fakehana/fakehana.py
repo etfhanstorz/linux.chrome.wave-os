@@ -24,6 +24,7 @@ from unicorn import Uc, UcError, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_INTR, UC_HO
 from unicorn.arm64_const import *
 from fakeec import FakeEC, FakeSPI, KeyScript
 from fakesdio import FakeMSDC
+from fakenet import FakeNet
 
 RAM_BASE, RAM_SIZE = 0x40000000, 0xc0000000          # first 3 GB of the real 4 GB
 TIMER_HZ = 13_000_000                                # MT8173 system counter
@@ -129,6 +130,10 @@ class Machine:
         fw_path = args.firmware
         fw = open(fw_path, 'rb').read() if os.path.exists(fw_path) else None
         self.msdc = FakeMSDC(self, self.regs, fw, args.fw_running)
+        self.net = FakeNet()                          # virtual network card + a tiny fake LAN (fake-only)
+        def nic_rd(uc, off, sz, _): return self.net.read(off)
+        def nic_wr(uc, off, sz, val, _): self.net.write(off, val)
+        self.uc.mmio_map(0x1f000000, 0x1000, nic_rd, None, nic_wr, None)
         self.timer_hz = TIMER_HZ
         self.keys = KeyScript(args.keys.encode().decode('unicode_escape')) if args.keys else None
         self.ec = FakeEC(self, self.keys)
@@ -446,7 +451,7 @@ def main():
     with tempfile.TemporaryDirectory() as tmp:
         itb, cmdline, kb, pre = unpack_kpart(a.kpart, tmp)
         kernel, dtb, info = fit_pick(itb, tmp)
-        dtb2 = fixup_dt(dtb, cmdline, tmp, a.coreboot, a.ramoops_in_dt)
+        dtb2 = fixup_dt(dtb, cmdline + ' wavefake', tmp, a.coreboot, a.ramoops_in_dt)   # marks the fake so fake-only features can refuse to run on the real machine
 
     print('== fake hana: firmware hand-off')
     print('  kpart: keyblock %#x, preamble %#x, cmdline "%s"' % (kb, pre, cmdline))
@@ -496,6 +501,8 @@ def main():
         print('  Wi-Fi chip power-cycled %d time(s)' % m.msdc.power_cycles)
     if m.msdc.loader and m.msdc.loader.cmds:
         print('  Wi-Fi firmware commands: ' + ', '.join('%#06x%s' % (cmd, '' if res == 0 else ' (result %d)' % res) for cmd, res in m.msdc.loader.cmds))
+    if m.net.events:
+        print('  fake LAN: ' + '; '.join(m.net.events[:12]))
     if m.keys:
         print('  keys typed: %r (done at fake %.1f s)' % (a.keys, m.keys.end_s))
 
