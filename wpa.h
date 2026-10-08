@@ -228,6 +228,10 @@ static int wifi_connect(const char *name) {
     puts("  connect times:");
     for (u32 i = 1; i < 7; i++) { if (!cstamp[i]) break; puts(" "); puts(lab[i - 1]); put_secs(ms_of(cstamp[i] - cstamp[i - 1])); putc('s'); }
     puts(wifi_last_chan ? "  (channel " : ""); if (wifi_last_chan) { put_dec(wifi_last_chan); putc(')'); }
+    if (prof_get("upload")) {                                            // inside "chip": power cycle, chip power-up, firmware upload, firmware boot
+        puts("  chip = power "); put_secs(ms_of(prof_get("pwr"))); puts(" on "); put_secs(ms_of(prof_get("on")));
+        puts(" upload "); put_secs(ms_of(prof_get("upload"))); puts(" boot "); put_secs(ms_of(prof_get("boot")));
+    }
     putc('\n');
     return ok;
 }

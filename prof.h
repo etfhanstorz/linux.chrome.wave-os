@@ -21,6 +21,7 @@ static void prof_stop(const char *name, u64 t0) {
     if (prof_n < sizeof prof_spans / sizeof prof_spans[0]) { prof_spans[prof_n].name = name; prof_spans[prof_n].t = d; prof_spans[prof_n].calls = 1; prof_n++; }
 }
 static void prof_reset(void) { prof_idle = 0; prof_n = 0; }
+static u64 prof_get(const char *name) { for (u32 i = 0; i < prof_n; i++) if (streq(prof_spans[i].name, name)) return prof_spans[i].t; return 0; }
 
 static u32 ms_of(u64 t) { u64 hz = tick_hz(); return hz ? (u32)(t / (hz / 1000)) : 0; }
 static void put_secs(u32 ms) {                                        // 12345 -> "12.3"

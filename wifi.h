@@ -199,7 +199,7 @@ static int wifi_on(void) {
         if (msdc_cmd(5, want, RSP_R3, &ocr)) { err("WIFI", 3, "chip did not answer CMD5 (not powered, or bus problem)"); return 0; }
         if (ocr >> 31) break;                    // ready
         if (hz && ticks() - t0 > hz) { err("WIFI", 4, "chip never became ready (CMD5 busy for 1 s)"); return 0; }
-        delay_us(10000);
+        delay_us(1000);                          // v1.6-004: poll every 1 ms (was 10 ms)
     }
     u32 r6 = 0, r1 = 0;
     if (msdc_cmd(3, 0, RSP_R1, &r6)) { errs("WIFI", 5, 1, "chip did not give an address (CMD3)"); return 0; }
@@ -232,7 +232,7 @@ static int wifi_on(void) {
         int ior = sdio_read_byte(0, 0x03);
         if (ior >= 0 && (ior & 2)) ready = 1;
         else if (hz && ticks() - t0 > hz) break;
-        else delay_us(10000);
+        else delay_us(1000);
     }
     if (!ready) { err("WIFI", 8, "Wi-Fi function 1 did not become ready after enabling"); return 0; }
     if (sdio_write_byte(0, 0x110, 0x00) || sdio_write_byte(0, 0x111, 0x01)) {   // FBR1 block size = 256
@@ -415,7 +415,9 @@ static int fn1_rd(u32 reg) { return sdio_read_byte(1, reg); }
 static int fn1_wr(u32 reg, u32 v) { return sdio_write_byte(1, reg, v); }
 
 static int wifi_fw(void) {
+    u64 t_on = prof_start();
     if (!wifi_on()) return 0;
+    prof_stop("on", t_on);
     u32 fwlen = (u32)(fw_end - fw_start);
     puts("firmware: "); put_dec(fwlen); puts(" bytes built in; going 4-bit and faster\n");
     // faster bus: 4-bit (CCCR bus interface control), controller clock /16 of its source
@@ -446,13 +448,14 @@ static int wifi_fw(void) {
     }
     static u8 buf[2312 + 256];
     u32 offset = 0, blocks = 0, retries = 0, last_kb = 0;
+    u64 t_up = prof_start();
     for (;;) {
         // wait for "card io ready" + "download ready" (status register 0x50, bits 3 and 0)
         u32 tries; int cs = 0;
         for (tries = 0; tries < 2000; tries++) {
             cs = fn1_rd(0x50);
             if (cs >= 0 && (cs & 9) == 9) break;
-            delay_us(500);
+            delay_us(50);                                                // v1.6-004: was 500 us per check, ~310 checks per upload
         }
         if (tries == 2000) {
             puts("  chip status 0x50 = "); put_hex((u32)cs); puts(" (need bits 0 and 3); function 1 registers:\n");
@@ -471,7 +474,7 @@ static int wifi_fw(void) {
             int b0 = fn1_rd(0x60), b1 = fn1_rd(0x61);
             if (b0 < 0 || b1 < 0) goto bad;
             len = ((u32)b1 << 8) | (u32)b0;
-            if (!len) delay_us(200);
+            if (!len) delay_us(20);
         }
         if (!len) break;                         // chip wants nothing more
         if (len > 2312) { err("WIFI", 10, "firmware upload failed: chip asked for an impossible length"); return 0; }
@@ -494,7 +497,9 @@ static int wifi_fw(void) {
         offset += txlen;
         if (offset / 131072 != last_kb) { last_kb = offset / 131072; puts("  sent "); put_dec(offset / 1024); puts(" KB\n"); }
     }
+    prof_stop("upload", t_up);
     puts("  upload done ("); put_dec(offset); puts(" bytes). waiting for the firmware to start...\n");
+    u64 t_boot = prof_start();
     u64 hz = tick_hz(), t0 = ticks();
     int s0 = 0, s1 = 0;
     for (;;) {
@@ -505,8 +510,9 @@ static int wifi_fw(void) {
             err("WIFI", 11, "firmware uploaded but did not report ready (0xfedc)");
             return 0;
         }
-        delay_us(10000);
+        delay_us(1000);
     }
+    prof_stop("boot", t_boot);
     puts("  firmware status 0xfedc: the Wi-Fi firmware is RUNNING.\n");
     return 1;
 bad:
@@ -785,20 +791,21 @@ static void scan_event(const u8 *ev, u32 len) {
     if (ev[4] == 0) scan_done = 1;                                  // more_event == 0: that was the last report
 }
 
+static u32 scan_quick;                      // 1 = do not keep listening after the scan's last report (one known channel)
 // Wait up to `ms` for events on the command port, handing each to the hook, until a scan finishes.
 static void wifi_poll_events(u32 ms) {
     u64 hz = tick_hz(), t0 = ticks();
     u64 done_at = 0;                                                // when the last-report flag was seen: keep listening a little longer for stragglers
     while (hz && ticks() - t0 < hz / 1000 * ms) {
         if (scan_done && !done_at) done_at = ticks();
-        if (done_at && ticks() - done_at > hz * 3 / 2) break;
+        if (done_at && (scan_quick || ticks() - done_at > hz * 3 / 2)) break;   // the channel shortcut stops as soon as the scan reports done
         int st = fn1_rd(0x03);
         if (cmd_packet_waiting(st)) {
             int l0 = fn1_rd(0xb4), l1 = fn1_rd(0xb5);
             u32 rx = ((u32)(l1 < 0 ? 0 : l1) << 8) | (u32)(l0 < 0 ? 0 : l0), blocks = (rx + 255) / 256;
             if (rx > 4 && blocks * 256 <= sizeof wbuf && !sdio_read_port(WCMD_PORT, wbuf, blocks) && (after_packet_read(rx), 1) && get16(wbuf + 2) == 3 && wifi_event_hook)
                 wifi_event_hook(wbuf + 4, get16(wbuf) > 4 ? get16(wbuf) - 4 : 0);
-        } else delay_us(500);
+        } else delay_us(100);
     }
 }
 
@@ -920,9 +927,9 @@ static int wifi_find(const char *name) {
     u32 hint = wifi_last_chan ? wifi_last_chan : WIFI_HINT_CHAN;
     if (hint) {
         u8 hc = (u8)hint;
-        scan_cmd_ms = 3000;
+        scan_cmd_ms = 3000; scan_quick = 1;
         scan_band(hint >= 36 ? 1 : 0, &hc, 1);
-        scan_cmd_ms = 10000;
+        scan_cmd_ms = 10000; scan_quick = 0;
         for (u32 i = 0; i < nap && !have_target; i++) if (streq(aps[i].ssid, scan_ssid)) { ap_copy(&target, &aps[i]); have_target = 1; }
         if (have_target) grp[gn++] = 'h';
     }

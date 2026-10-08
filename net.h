@@ -208,7 +208,7 @@ static int dhcp_run(void) {
     static const u8 bcast[6] = {255, 255, 255, 255, 255, 255};
     u32 xid = (u32)ticks() ^ 0x5a17c0de;
     net_ip = 0; net_gw = 0; for (u32 i = 0; i < 4; i++) arp_tab[i].ip = 0;
-    for (int attempt = 1; attempt <= 3; attempt++) {
+    for (int attempt = 1; attempt <= 6; attempt++) {
         mset(m, 0, sizeof m);
         m[0] = 1; m[1] = 1; m[2] = 6; be32w(m + 4, xid); be16w(m + 10, 0x8000);              // BOOTREQUEST, ethernet, broadcast flag
         mcopy(m + 28, net_mac, 6);
@@ -218,7 +218,7 @@ static int dhcp_run(void) {
         m[o++] = 55; m[o++] = 3; m[o++] = 1; m[o++] = 3; m[o++] = 6;                        // wanted: mask, router, dns
         m[o++] = 255;
         udp_send_raw(bcast, 0, 0xffffffff, 68, 67, m, o);
-        if (!dhcp_wait(2, xid, 2000)) { puts("  dhcp: no offer (try "); put_dec(attempt); puts(")\n"); continue; }
+        if (!dhcp_wait(2, xid, 600)) { puts("  dhcp: no offer (try "); put_dec(attempt); puts(")\n"); continue; }
         u32 yi = be32r(dhcp_in + 16);
         dhcp_parse_options();
         puts("  dhcp offer: "); put_ip(yi); putc('\n');
@@ -231,7 +231,7 @@ static int dhcp_run(void) {
         m[o++] = 54; m[o++] = 4; be32w(m + o, net_srv); o += 4;
         m[o++] = 255;
         udp_send_raw(bcast, 0, 0xffffffff, 68, 67, m, o);
-        if (!dhcp_wait(5, xid, 2000)) { puts("  dhcp: no ack\n"); continue; }
+        if (!dhcp_wait(5, xid, 600)) { puts("  dhcp: no ack\n"); continue; }
         net_ip = be32r(dhcp_in + 16);
         dhcp_parse_options();
         return 1;
