@@ -148,3 +148,23 @@ dcache_clean_inval_all:
     dsb     sy
     isb
     ret
+
+// ---- update hand-over (v1.53.8): copy a downloaded image over this one and start it, exactly like a fresh boot ----
+// x0 = DTB, x1 = source, x2 = destination (our own load address), x3 = size in bytes (multiple of 8).
+// Position independent: update.h copies these bytes into the RAM buffer first, because this code itself gets overwritten by the copy.
+    .section .text, "ax"
+    .balign 16
+    .global update_tramp
+    .global update_tramp_end
+update_tramp:
+    mov     x5, x2
+1:  ldr     x4, [x1], #8
+    str     x4, [x2], #8
+    subs    x3, x3, #8
+    b.hi    1b
+    ic      iallu
+    dsb     sy
+    isb
+    br      x5
+update_tramp_end:
+    nop

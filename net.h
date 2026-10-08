@@ -272,6 +272,7 @@ static int net_udp(u32 dst, u32 sport, u32 dport, const u8 *data, u32 len) {
 #define TCP_RESET 4
 static struct { u32 state, lport, rport, rip, snd_nxt, rcv_nxt; u8 *dst; u32 dstmax, got, overflow, segs; u8 rmac[6]; } tcp;
 
+static void (*net_idle_hook)(void);                       // called about every 2 s while a download waits (update.h shows progress and ships the log)
 static u32 tcp_mss = 1460;                                // largest TCP payload we ask the sender for; `mss N` changes it (v1.53.5 tried 320, but Windows never sends less than 536, and v1.53.7 reads whole packets anyway)
 static int tcp_send(u32 flags, const u8 *data, u32 len) {
     static u8 s[1500];
@@ -332,9 +333,10 @@ static int http_get(u32 ip, u32 port, const char *host, const char *path, u8 *ds
     if (r) { tcp.state = TCP_CLOSED; return r == -1 ? -1 : -2; }
     tcp_send(24, req, n);                                                    // PSH|ACK with the request
     tcp.snd_nxt += n;
-    u64 hz = tick_hz(), t0 = ticks(), last = t0; u32 last_got = 0;
+    u64 hz = tick_hz(), t0 = ticks(), last = t0, hook_at = t0; u32 last_got = 0;
     while (tcp.state == TCP_ESTAB && hz && ticks() - t0 < hz / 1000 * timeout_ms) {
         net_poll(); wdt_kick();
+        if (net_idle_hook && ticks() - hook_at > hz * 2) { hook_at = ticks(); net_idle_hook(); }
         if (tcp.got != last_got) { last_got = tcp.got; last = ticks(); }
         else if (ticks() - last > hz) { tcp_send(16, 0, 0); last = ticks(); }         // quiet for a second: nudge the sender with an ACK
     }

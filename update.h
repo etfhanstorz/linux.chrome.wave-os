@@ -4,8 +4,19 @@
 #include "update_key.h"
 #include "pc_addr.h"                                  // PC_ADDR_DEFAULT: this PC's address when the image was built
 
-#define UPDATE_ADDR 0x70000000UL                      // free RAM (the framebuffer, ramoops, DTB and our own image are elsewhere)
-#define UPDATE_MAX  (6u * 1024 * 1024)
+// The download goes into a buffer inside our own image (BSS), which is guaranteed to be real RAM that the firmware gave us. (v1.53.7 used a fixed
+// address, 0x70000000, and the real Chromebook froze right after "new image": that address is probably not usable.) After the checks, a small
+// routine copies the new image over this one and starts it from the same address, like a fresh boot.
+#define UPDATE_MAX  (2u * 1024 * 1024)
+#define UPDATE_TRAMP_OFF (2u * 1024 * 1024)           // the copy routine is parked here, above the image, while it overwrites us
+static u8 update_buf[UPDATE_TRAMP_OFF + 4096] __attribute__((aligned(4096)));
+extern const u8 update_tramp[] __attribute__((visibility("hidden")));
+extern const u8 update_tramp_end[] __attribute__((visibility("hidden")));
+static int log_ship(void);                            // log.h: send what has been printed to the PC
+static void update_progress(void) {                   // called every 2 s while the image downloads: show it, and send the log so a stall is visible on the PC
+    puts("  ... "); put_dec(tcp.got); puts(" bytes, "); put_dec(tcp.segs); puts(" segments, damaged dropped "); put_dec(net_bad_ip + net_bad_l4); putc('\n');
+    log_ship();
+}
 static const u8 *boot_dtb;                            // the device tree the firmware gave us: handed on to the new image
 static u32 update_srv = PC_ADDR_DEFAULT;              // where `up` fetches the new build from: the PC's address at build time; `upset ADDRESS` changes it (until the next reboot)
 
@@ -48,9 +59,13 @@ static int wave_update(const char *arg) {
     hex_to_bytes((const char *)man + i + 65, want_mac, 32);
     puts("  new image: "); put_dec(size); puts(" bytes\n");
     if (size < 4096 || size > UPDATE_MAX) { err("NET", 22, "update: the image size is not plausible"); return 0; }
-    u8 *img = (u8 *)UPDATE_ADDR;
+    u8 *img = update_buf;
+    puts("  download buffer at "); put_hex((u64)img); putc('\n');
+    log_ship();
     u64 t0 = ticks();
+    net_idle_hook = update_progress;
     n = http_get(update_srv, 8000, host, "/Image", img, UPDATE_MAX, 60000);
+    net_idle_hook = 0;
     if (n < 0) {
         puts("  image download failed ("); put_dec((u64)-n); puts(")\n");
         puts("  got "); put_dec(tcp.got); puts(" of "); put_dec(size); puts(" bytes in "); put_dec(tcp.segs); puts(" segments; damaged packets dropped: "); put_dec(net_bad_ip + net_bad_l4); puts("\n");
@@ -67,9 +82,15 @@ static int wave_update(const char *arg) {
     puts("ok\n");
     if (img[56] != 'A' || img[57] != 'R' || img[58] != 'M' || img[59] != 0x64) { err("NET", 27, "update: not a valid arm64 image"); return 0; }
     puts("  verified. starting the new wave-os from RAM...\n");
+    log_ship();
     delay_us(2000000);
-    // Hand over: invalidate the instruction cache (we wrote the new code through the data side), then jump with the
-    // device tree pointer in x0, exactly as the firmware did for us.
-    __asm__ volatile("mov x0, %0\n\tic iallu\n\tdsb sy\n\tisb\n\tbr %1" :: "r"(boot_dtb), "r"(UPDATE_ADDR) : "x0", "memory");
+    // Hand over: park the copy routine above the downloaded image, then run it: it copies the image over ours and starts it from our own load
+    // address with the device tree pointer in x0, exactly as the firmware did for us.
+    u8 *tr = update_buf + UPDATE_TRAMP_OFF;
+    for (u32 i = 0; i < (u32)(update_tramp_end - update_tramp); i++) tr[i] = update_tramp[i];
+    u64 base; __asm__ volatile("adrp %0, _start\n\tadd %0, %0, :lo12:_start" : "=r"(base));
+    u64 size8 = ((u64)size + 7) & ~7ull;
+    __asm__ volatile("mov x0, %0\n\tmov x1, %1\n\tmov x2, %2\n\tmov x3, %3\n\tic iallu\n\tdsb sy\n\tisb\n\tbr %4"
+                     :: "r"((u64)boot_dtb), "r"((u64)img), "r"(base), "r"(size8), "r"((u64)tr) : "x0", "x1", "x2", "x3", "x5", "memory");
     return 1;
 }
