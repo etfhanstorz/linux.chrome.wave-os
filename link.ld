@@ -21,6 +21,8 @@ SECTIONS {
   stack_top = .;
   __bss_end = .;
   . = ALIGN(0x10000);
+  __img_heap = .;            /* 32 MB of picture memory for the browser (img.h) */
+  . += 0x2000000;
   _kend = .;
   image_size = ABSOLUTE(_kend - _kstart);
   /DISCARD/ : { *(.interp) *(.comment) *(.note*) *(.eh_frame*) }

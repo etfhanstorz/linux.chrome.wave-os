@@ -79,6 +79,7 @@ static void fill(const struct fb *f, u32 rgb) {
 #include "wpa.h"
 #include "bar.h"
 #include "tls.h"
+#include "img.h"
 #include "rsh.h"
 #include "web.h"
 #include "shell.h"
