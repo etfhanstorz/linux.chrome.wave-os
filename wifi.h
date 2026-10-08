@@ -775,6 +775,7 @@ static void wifi_poll_events(u32 ms) {
     }
 }
 
+static u32 scan_cmd_ms = 10000;            // wait for a scan command's answer this long (wififind uses less: failures are common on 5 GHz)
 static char scan_ssid[33]; static u32 scan_ssid_len;      // set by wififind: scan for this one name only
 static int scan_band(u32 radio, const u8 *chans, u32 nch) {
     static u8 body[4 + 5 + 5 + 40 + 4 + 6 * 16 + 6 + 4 + 14];
@@ -802,7 +803,7 @@ static int scan_band(u32 radio, const u8 *chans, u32 nch) {
     put16(body + p, 0x01c5); put16(body + p + 2, 2); put16(body + p + 4, 50); p += 6;    // gap between channels: 50 TU
     u8 r[8]; u32 n = 0;
     scan_done = 0;
-    wifi_cmd_ms = 10000;                                            // the firmware answers only after the scan: Linux waits ~10 s
+    wifi_cmd_ms = scan_cmd_ms;                                      // the firmware answers only after the scan: Linux waits ~10 s
     int rc = wifi_cmd(0x0107, body, p, r, sizeof r, &n);
     wifi_cmd_ms = 1000;
     if (!wifi_cmd_err("SCAN", rc, 0)) return 0;
@@ -874,13 +875,16 @@ static int wifi_find(const char *name) {
     puts("looking for "); puts(scan_ssid); puts(" on 2.4 GHz...\n");
     scan_band(0, ch24, sizeof ch24);
     for (u32 i = 0; i < nap && !have_target; i++) if (streq(aps[i].ssid, scan_ssid)) { ap_copy(&target, &aps[i]); have_target = 1; }
+    scan_cmd_ms = 4000;                                              // short wait: a 5 GHz group that gets no answer must not stall the whole search
     for (u32 i = 0; i < sizeof ch5 && !have_target; i += 4) {
         u32 n5 = sizeof ch5 - i < 4 ? sizeof ch5 - i : 4;
-        puts("looking on 5 GHz channels "); put_dec(ch5[i]); puts("...\n");
-        if (!scan_band(1, ch5 + i, n5)) break;
+        u32 ev0 = scan_events;
+        puts("5g "); put_dec(ch5[i]); puts(": ");
+        int ok5 = scan_band(1, ch5 + i, n5);
+        if (ok5) { puts("ok, "); put_dec(scan_events - ev0); puts(" events\n"); } else puts("NO ANSWER\n");
         for (u32 k = 0; k < nap && !have_target; k++) if (streq(aps[k].ssid, scan_ssid)) { ap_copy(&target, &aps[k]); have_target = 1; }
     }
-    wifi_event_hook = 0;
+    scan_cmd_ms = 10000;    wifi_event_hook = 0;
     scan_ssid_len = 0;
     puts("events "); put_dec(scan_events); puts("  recs "); put_dec(recs_seen); putc('\n');
     if (!have_target) { puts("not found: "); puts(scan_ssid); putc('\n'); return 0; }
