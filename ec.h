@@ -113,8 +113,10 @@ static int ec_cmd(u16 cmd, u8 ver, const u8 *p, u16 plen, u8 *resp, u16 rmax, u1
     q[1] = -sum;
 
     int ret = -1;
+    u32 sendlen = (8u + plen + 3) & ~3u;                              // a multiple of 4 bytes: the SPI controller jams on anything else (v1.6-002: a 10-byte battery request did)
+    for (u32 i = 8u + plen; i < sendlen; i++) q[i] = 0;
     spi_cs(1);
-    if (spi_xfer(ec_out, ec_in, 8 + plen)) { ret = -2; goto out; }
+    if (spi_xfer(ec_out, ec_in, sendlen)) { ret = -2; goto out; }
     for (u32 i = 0; i < 8u + plen; i++)
         if (ec_in[i] == EC_SPI_PAST_END || ec_in[i] == EC_SPI_RX_BAD_DATA || ec_in[i] == EC_SPI_NOT_READY) { ret = -3; goto out; }
 
