@@ -901,7 +901,7 @@ static int wifi_find(const char *name) {
     scan_cmd_ms = 10000;    wifi_event_hook = 0;
     scan_ssid_len = 0;
     grp[gn] = 0;
-    if (!have_target) { sum_s("N "); sum_s(grp); return 0; }      // N + one char per scan: - no answer, a answered, e got events
+    if (!have_target) { sum_s("N "); sum_rle(grp); return 0; }      // N + one char per scan: - no answer, a answered, e got events
     sum_s("F ch"); { char t[4]; u32 c = target.chan, k = 0; if (c >= 100) t[k++] = '0' + c / 100 % 10; t[k++] = '0' + c / 10 % 10; t[k++] = '0' + c % 10; for (u32 q = 0; q < k; q++) sum_c(t[q]); }
     sum_c(' '); sum_s(target.sec == 2 ? "WPA2" : target.sec == 1 ? "WPA" : target.sec == 3 ? "WEP" : "open");
     { int d = target.rssi < 0 ? -target.rssi : target.rssi; sum_s(" -"); sum_c('0' + d / 10 % 10); sum_c('0' + d % 10); }
@@ -942,19 +942,27 @@ static int wifi_chan(const char *arg) {
     if (!wifi_ready && !wifi_init()) return 0;
     u8 r[8]; u32 n = 0; static const u8 macctl[6] = {0x13, 0x00, 0x00, 0x00, 0x00, 0x00};
     wifi_cmd(0x0028, macctl, sizeof macctl, r, sizeof r, &n);
-    u8 c1 = (u8)ch; u32 radio = ch >= 36 ? 1 : 0;
-    static const char *names[] = {"as-is", "dom", "11d", "11d+dom", "11d+dom+11h", "region", "11d+dom+reg", "bare", "ch6", "ch36", "ch149", "min40"};
-    static const u8 pre[12] = {0, 1, 2, 3, 7, 8, 11, 3, 3, 3, 3, 3};          // setup before the scan: 1 domain info, 2 enable 11d, 4 enable 11h, 8 read channel region
+    u32 radio = ch >= 36 ? 1 : 0;
+    // Variants (v1.51): 0 wildcard 2.4 GHz ch1-11 (the scan that works), 1 wildcard ch6, 2 named ch1-11, 3 named ch6, 4 wildcard CH, 5 named CH,
+    // 6 wildcard ch36, 7 wildcard 4 channels around CH, 8 wildcard CH + 11d/domain, 9 4 channels + 11d/domain, 10 wildcard CH longer listen, 11 wildcard CH no gap TLV.
+    static const char *names[] = {"w11", "w6", "d11", "d6", "wCH", "dCH", "w36", "w4", "wCH+11d", "w4+11d", "wCH-min40", "wCH-nogap"};
+    static const u8 pre[12] = {0, 0, 0, 0, 0, 0, 0, 0, 3, 3, 0, 0};          // setup before the scan: 1 domain info, 2 enable 11d, 4 enable 11h, 8 read channel region
+    static const u8 cl[11] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
+    u8 cs[11]; u32 ncs = 1;
     wifi_event_hook = scan_event;
-    char res[13]; for (u32 q = 0; q < 12; q++) res[q] = '.'; res[12] = 0;
+    char res[13]; for (u32 q = 0; q < 12; q++) res[q] = '_'; res[12] = 0;
     if (wifi_verbose) puts("variant         | answer events recs found\n");
     for (u32 v = 0; v < 12; v++) {
         sb_no_bssmode = sb_no_ssid = sb_no_rates = sb_no_gap = sb_passive = sb_min = sb_ht = sb_probes = 0;
-        scan_ssid_len = v == 7 ? 0 : nl;                                    // 'bare': wildcard scan
-        if (v == 7) { sb_no_ssid = sb_no_rates = sb_no_gap = sb_no_bssmode = 1; }
-        if (v == 11) sb_min = 40;
-        c1 = (u8)ch; radio = ch >= 36 ? 1 : 0;
-        if (v == 8) { c1 = 6; radio = 0; } if (v == 9) { c1 = 36; radio = 1; } if (v == 10) { c1 = 149; radio = 1; }
+        scan_ssid_len = (v == 2 || v == 3 || v == 5) ? nl : 0;              // 'd' variants: ask for the name only
+        if (v == 10) sb_min = 40;
+        if (v == 11) sb_no_gap = 1;
+        radio = (v <= 3) ? 0 : 1; if (v == 4 || v == 5 || v == 8 || v == 10 || v == 11) radio = ch >= 36 ? 1 : 0;
+        ncs = 1; cs[0] = (u8)ch;
+        if (v == 0 || v == 2) { ncs = 11; for (u32 q = 0; q < 11; q++) cs[q] = cl[q]; }
+        if (v == 1 || v == 3) cs[0] = 6;
+        if (v == 6) cs[0] = 36;
+        if (v == 7 || v == 9) { ncs = 4; for (u32 q = 0; q < 4; q++) cs[q] = (u8)(ch - 8 + 4 * q); }
         nap = 0; scan_events = 0; scan_bytes = 0; dbg_taken = 0; raw_taken = 0; ev_log = 0; recs_seen = 0; mb_fail = 0;
         scan_cmd_ms = 3500; wdt_kick();
         if (v) {                                                            // every variant starts on a freshly restarted chip
@@ -965,7 +973,7 @@ static int wifi_chan(const char *arg) {
         if (pre[v] & 1) wifi_set_domain();
         if (pre[v] & 4) wifi_snmp(10, 1);
         if (pre[v] & 8) { static const u8 rg[2] = {0, 0}; wifi_cmd(0x0242, rg, 2, r, sizeof r, &n); }
-        int ok = scan_band(radio, &c1, 1);
+        int ok = scan_band(radio, cs, ncs);
         scan_cmd_ms = 10000;
         u32 hit = 0; for (u32 k = 0; k < nap; k++) if (nl ? streq(aps[k].ssid, scan_ssid) : aps[k].chan == ch) hit = 1;
         res[v] = hit ? 'F' : ok ? 'a' : scan_last_rc > 0 ? (scan_last_rc < 10 ? '0' + scan_last_rc : '+') : scan_last_rc == -2 ? '-' : scan_last_rc == -1 ? '=' : '~';   // - no answer, digit = firmware error number, = send failed, a answered, F found
@@ -975,7 +983,7 @@ static int wifi_chan(const char *arg) {
     }
     sb_no_bssmode = sb_no_ssid = sb_no_rates = sb_no_gap = sb_passive = sb_min = sb_ht = sb_probes = 0;
     wifi_event_hook = 0; scan_ssid_len = 0;
-    sum_s("R:"); sum_s(res); sum_s(" D:"); sum_c(dom_res); sum_s(" S:"); sum_c(snmp_res);   // the shell prints this on the one-line summary
+    sum_s("R:"); sum_rle(res); sum_s(" D:"); sum_c(dom_res); sum_s(" S:"); sum_c(snmp_res);   // the shell prints this on the one-line summary
     return 1;
 }
 // ---- v1.39: wifitry = scan with many read settings and print a scoreboard (looking for the setting that gets whole packets through) ----

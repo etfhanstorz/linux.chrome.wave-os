@@ -61,7 +61,7 @@ static void fill(const struct fb *f, u32 rgb) {
 
 #include "rlog.h"
 #include "console.h"
-#define VERSION "wave-os v1.50"
+#define VERSION "wave-os v1.50.1"
 #include "err.h"
 #include "sys.h"
 #include "probe.h"
@@ -189,7 +189,7 @@ void main(const u8 *dtb) {
     puts(VERSION "\n\n");
     con_fg = 0xFFE040;
     if (err_count) { con_on = 1; list_errors(); con_on = screen; }   // codes from before the screen was up
-    con_fg = 0xFFFFFF;
+    con_fg = C_TEXT;
     puts("keyboard...\n");
     wdt_kick();
     if (!kb_init()) {

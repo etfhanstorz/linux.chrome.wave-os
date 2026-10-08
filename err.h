@@ -55,6 +55,18 @@ static char cmd_codes[48]; static u32 cmd_codes_n;
 static void sum_reset(void) { sum_n = 0; sum_res[0] = 0; cmd_codes_n = 0; cmd_codes[0] = 0; }
 static void sum_c(char c) { if (sum_n < sizeof sum_res - 1) { sum_res[sum_n++] = c; sum_res[sum_n] = 0; } }
 static void sum_s(const char *s) { while (*s) sum_c(*s++); }
+// Run-length form of a result string: 111111111111 -> 1x12, aaaaFFaFFFFF -> ax4.Fx2.a.Fx5
+static void sum_rle(const char *s) {
+    u32 i = 0, first = 1;
+    while (s[i]) {
+        u32 j = i; while (s[j] == s[i]) j++;
+        u32 k = j - i;
+        if (!first) sum_c('.');
+        first = 0; sum_c(s[i]);
+        if (k > 1) { sum_c('x'); if (k >= 10) sum_c('0' + k / 10 % 10); sum_c('0' + k % 10); }
+        i = j;
+    }
+}
 static void code_note(const char *area, u32 num, u32 sub) {
     char t[8]; u32 k = 0;
     t[k++] = area_digit(area); t[k++] = '.'; t[k++] = '0' + num / 10 % 10; t[k++] = '0' + num % 10;

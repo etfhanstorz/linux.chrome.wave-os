@@ -25,18 +25,23 @@ static void run_cmd(char *line) {
     while (*arg && *arg != ' ') arg++;
     if (*arg) { *arg++ = 0; while (*arg == ' ') arg++; }
     if (!*line) return;
+    static char al_arg[24];                                            // short aliases for the long test commands: c = wifichan 157 HomeWifi, f = wififind HomeWifi
+    if (streq(line, "c")) { line = "wifichan"; const char *a = "157 HomeWifi"; u32 q = 0; while ((al_arg[q] = a[q])) q++; arg = al_arg; }
+    else if (streq(line, "f")) { line = "wififind"; const char *a = "HomeWifi"; u32 q = 0; while ((al_arg[q] = a[q])) q++; arg = al_arg; }
     char name[16]; { u32 q = 0; while (line[q] && q < 15) { name[q] = line[q]; q++; } name[q] = 0; }
     sum_reset();
     run_cmd2(line, arg);
     if ((name[0] == 'w' && name[1] == 'i') || streq(name, "update") || streq(name, "cryptotest") || streq(name, "netdemo")) {   // one-line summary: command, what it says, error codes
-        outs("> "); outs(name); out(' ');
+        u32 keep = con_fg;                                            // coloured: green = fine, red = errors
+        con_fg = cmd_codes_n ? 0xFF6060 : 0x60FF80; outs("> "); con_fg = 0x40E0FF; outs(name); out(' ');
+        con_fg = cmd_codes_n ? 0xFFE040 : C_TEXT;
         outs(sum_res[0] ? sum_res : cmd_codes_n ? "FAIL" : "ok");
-        if (cmd_codes_n) { outs(" e"); outs(cmd_codes); }
-        out('\n');
+        if (cmd_codes_n) { con_fg = 0xFF6060; outs(" e"); outs(cmd_codes); }
+        out('\n'); con_fg = keep;
     }
 }
 static void run_cmd2(char *line, char *arg) {
-    if (streq(line, "help")) outs("commands: help version info echo color clear errors wifi wifion wififw wifiinit netdemo update wifichan wififind wifitry wifiv wifigap wifidiv wifiscan wifiscanm wifiscanblk wifiscan5 cryptotest reboot\n");
+    if (streq(line, "help")) outs("commands: c f r help version info echo color clear errors wifi wifion wififw wifiinit netdemo update wifichan wififind wifitry wifiv wifigap wifidiv wifiscan wifiscanm wifiscanblk wifiscan5 cryptotest reboot\n");
     else if (streq(line, "version")) outs(VERSION "\n");
     else if (streq(line, "info")) cmd_info();
     else if (streq(line, "echo")) { outs(arg); out('\n'); }
@@ -72,8 +77,10 @@ static void run_cmd2(char *line, char *arg) {
 static void shell(void) {
     static char buf[128];
     u32 n = 0;
+    con_fg = 0x40E0FF; outs("\n  ~~~~  "); con_fg = C_TEXT; outs(VERSION); con_fg = 0x40E0FF; outs("  ~~~~\n"); con_fg = 0x808090;
+    outs("  type help   c = wifichan   f = wififind   r = repeat\n\n"); con_fg = C_TEXT;
     for (;;) {
-        outs("wave> "); n = 0;
+        con_fg = 0x40E0FF; outs("wave"); con_fg = 0x60FF80; outs("> "); con_fg = C_TEXT; n = 0;
         for (;;) {
             glyph(con_col, con_row, '_');
             int c;
@@ -84,6 +91,9 @@ static void shell(void) {
             else if (c >= 32 && c < 127 && n < sizeof buf - 1) { buf[n++] = c; out(c); }
         }
         buf[n] = 0;
+        static char last[128];                                          // r = run the previous command again
+        if (buf[0] == 'r' && !buf[1] && last[0]) { u32 q = 0; while ((buf[q] = last[q])) q++; outs(buf); out('\n'); }
+        else if (buf[0]) { u32 q = 0; while ((last[q] = buf[q])) q++; }
         run_cmd(buf);
     }
 }

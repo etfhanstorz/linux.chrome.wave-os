@@ -54,8 +54,6 @@ Write-Host "Other partitions on the stick are NOT touched.`n"
 
 if ($DryRun) { Write-Host "Dry run: nothing written." -ForegroundColor Green; try { Stop-Transcript | Out-Null } catch {}; Read-Host "`nPress Enter to close"; exit 0 }
 
-$ans = Read-Host "Type yes (or y) to write wave-os to Disk $($disk.Number) now"
-if ($ans.Trim() -notmatch '^(y|yes)$') { Stop-Here "Cancelled. Nothing was written." }
 
 $path = "\\.\PhysicalDrive$($disk.Number)"
 $fs = New-Object IO.FileStream($path, [IO.FileMode]::Open, [IO.FileAccess]::ReadWrite, [IO.FileShare]::ReadWrite, 4096, [IO.FileOptions]::WriteThrough)
