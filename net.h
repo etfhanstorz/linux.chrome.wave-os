@@ -35,6 +35,7 @@ static u32 csum(const u8 *p, u32 n, u32 sum) {
 static u8 udp_in[1500]; static u32 udp_in_len, udp_in_port, udp_in_src, udp_in_got;      // last UDP payload for our listening port
 static u32 udp_listen_port;
 static u32 icmp_reply_seen, icmp_reply_id, icmp_reply_seq, icmp_reply_ttl;
+static u8 icmp_reply_buf[1500]; static u32 icmp_reply_len, icmp_reply_csum_ok;       // the last ping reply as it arrived (kept even if damaged while rxtest_on)
 static u8 dhcp_in[600]; static u32 dhcp_in_len, dhcp_in_got;
 
 static int eth_send(const u8 *dst_mac, u32 ethertype, const u8 *payload, u32 plen) {
@@ -117,6 +118,10 @@ static void net_handle(const u8 *f, u32 len) {
     if (!ip_good && !rxtest_on) { net_bad_ip++; return; }                                    // damaged header: drop
     if (proto == 1 && plen >= 8) {                                                          // ICMP
         if (rxtest_on && p[0] == 8) { rxtest_note(p, plen, ip_good); if (!ip_good) return; }
+        else if (rxtest_on && p[0] == 0) {                                                  // a reply to our own big ping (pingbig / rdsweep): keep it even if damaged, the caller judges it
+            icmp_reply_len = plen <= sizeof icmp_reply_buf ? plen : 0; if (icmp_reply_len) mcopy(icmp_reply_buf, p, plen);
+            icmp_reply_csum_ok = csum(p, plen, 0) == 0xffff && ip_good; icmp_reply_seen = 1; return;
+        }
         else if (csum(p, plen, 0) != 0xffff) { net_bad_l4++; return; }
         if (p[0] == 8 && dst == net_ip) {                                                   // echo request: answer it
             static u8 r[1480];
