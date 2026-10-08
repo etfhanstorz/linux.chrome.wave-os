@@ -2,6 +2,13 @@
 # Run inside Linux/WSL. Needs: gcc-aarch64-linux-gnu device-tree-compiler u-boot-tools vboot-utils (futility)
 set -e
 X=aarch64-linux-gnu-
+# Update-signing key: random, created once, kept out of git. update_key.h goes into the image; the PC-side update
+# server reads update_key.txt. Only an update signed with this key is accepted by `update`.
+[ -f update_key.txt ] || head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n' > update_key.txt
+python3 - <<'EOF'
+k = open('update_key.txt').read().strip()
+open('update_key.h', 'w').write('static const unsigned char update_key[16] = {%s};\n' % ', '.join('0x' + k[i:i+2] for i in range(0, 32, 2)))
+EOF
 ${X}gcc -c -O2 -ffreestanding -fpie -mgeneral-regs-only -mstrict-align -nostdlib main.c -o main.o
 [ -f fw/sd8897_uapsta.bin ] || sh fetch_fw.sh
 ${X}gcc -c fw.S -o fw.o

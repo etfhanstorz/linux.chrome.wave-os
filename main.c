@@ -61,7 +61,7 @@ static void fill(const struct fb *f, u32 rgb) {
 
 #include "rlog.h"
 #include "console.h"
-#define VERSION "wave-os v1.43"
+#define VERSION "wave-os v1.44"
 #include "err.h"
 #include "sys.h"
 #include "probe.h"
@@ -69,6 +69,7 @@ static void fill(const struct fb *f, u32 rgb) {
 #include "crypto.h"
 #include "wifi.h"
 #include "net.h"
+#include "update.h"
 #include "ec.h"
 #include "shell.h"
 #ifdef QEMU
@@ -85,6 +86,7 @@ static void dump(const char *name, u64 base, const u32 *offs, int n) {
 }
 
 void main(const u8 *dtb) {
+    boot_dtb = dtb;
     icache_on();
 #ifndef QEMU
     wdt_arm(30);                              // dead-man switch: any freeze -> reboot in 30 s

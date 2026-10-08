@@ -71,3 +71,16 @@ the EC sent back (`EC_RES_*` in Linux `cros_ec_commands.h`).
 | **6.13.1** | The Wi-Fi firmware rejected a command (an error number is printed above) | || **6.14.1** | The scan answer was too short | |
 | **6.14.2** | A scan record in the answer was malformed | |
 | **6.14.3** | The scan finished but the firmware sent no scan result events | |
+
+## 7 Network and update
+
+| Code | Meaning | What to try |
+|---|---|---|
+| **7.20** | update: could not download the manifest | Is the update server running on the PC? Right address? Firewall? |
+| **7.21** | update: the manifest is malformed | Server and wave-os versions differ |
+| **7.22** | update: the image size is not plausible | |
+| **7.23** | update: could not download the image | Connection dropped; try again |
+| **7.24** | update: the image size does not match the manifest | Image changed while downloading |
+| **7.25** | update: the checksum does not match | Damaged download; try again |
+| **7.26** | update: the signature is wrong (not signed with our key) | Server uses a different key: copy update_key.txt |
+| **7.27** | update: not a valid arm64 image | |

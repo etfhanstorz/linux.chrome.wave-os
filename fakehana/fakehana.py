@@ -18,7 +18,7 @@ in /sys/fs/pstore/console-ramoops-0 afterwards, and a PNG of what the panel woul
 
 Usage: python3 fakehana.py ../out.kpart [--display off] [--coreboot] [--wdt-keeps-ram] [--png out.png]
 """
-import argparse, os, struct, subprocess, sys, tempfile, zlib
+import argparse, hashlib, hmac, os, struct, subprocess, sys, tempfile, zlib
 
 from unicorn import Uc, UcError, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_INTR, UC_HOOK_MEM_UNMAPPED, UC_HOOK_INSN
 from unicorn.arm64_const import *
@@ -131,6 +131,13 @@ class Machine:
         fw = open(fw_path, 'rb').read() if os.path.exists(fw_path) else None
         self.msdc = FakeMSDC(self, self.regs, fw, args.fw_running)
         self.net = FakeNet()                          # virtual network card + a tiny fake LAN (fake-only)
+        img = args.update_image
+        if img and os.path.exists(img):                # the fake PC's update server: /Image and a signed /manifest
+            data = open(img, 'rb').read()
+            keyf = os.path.join(os.path.dirname(os.path.abspath(img)), 'update_key.txt')
+            key = bytes.fromhex(open(keyf).read().strip()) if os.path.exists(keyf) else b'0' * 16
+            self.net.routes['/Image'] = data
+            self.net.routes['/manifest'] = ('%d %s %s\n' % (len(data), hashlib.sha256(data).hexdigest(), hmac.new(key, data, hashlib.sha256).hexdigest())).encode()
         def nic_rd(uc, off, sz, _): return self.net.read(off)
         def nic_wr(uc, off, sz, val, _): self.net.write(off, val)
         self.uc.mmio_map(0x1f000000, 0x1000, nic_rd, None, nic_wr, None)
@@ -440,6 +447,7 @@ def main():
     ap.add_argument('--spi-stall', type=int, default=0, help='scenario: the first N SPI packets never complete')
     ap.add_argument('--fw-running', action='store_true', default=True, help='the chip comes up with its firmware already running (real hana)')
     ap.add_argument('--fw-cold', dest='fw_running', action='store_false', help='the chip boots from ROM and needs the firmware uploaded')
+    ap.add_argument('--update-image', default=os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'Image'), help='the Image the fake PC serves at /Image (default: the newest build)')
     ap.add_argument('--ec', choices=['on', 'off'], default='on', help='scenario: the EC answers, or stays silent')
     ap.add_argument('--firmware', default=os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'fw', 'sd8897_uapsta.bin'),
                     help='the Wi-Fi firmware the fake chip checks the upload against')

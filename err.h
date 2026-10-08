@@ -39,7 +39,7 @@ static void status_update(void) {
 // Area numbers: 1 BOOT, 2 LOG, 3 DISP, 4 KB (keyboard), 5 EC (the keyboard chip's own errors), 6 WIFI.
 static char area_digit(const char *a) {
     if (streq(a, "BOOT")) return '1'; if (streq(a, "LOG")) return '2'; if (streq(a, "DISP")) return '3';
-    if (streq(a, "KB")) return '4'; if (streq(a, "EC")) return '5'; if (streq(a, "WIFI")) return '6';
+    if (streq(a, "KB")) return '4'; if (streq(a, "EC")) return '5'; if (streq(a, "WIFI")) return '6'; if (streq(a, "NET")) return '7';
     return '0';
 }
 static void put_code(const char *area, u32 num, u32 sub) {

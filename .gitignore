@@ -19,3 +19,6 @@ releases/wave-os-v1.3[0-9]*.kpart
 releases/wave-os-v1.4-*.kpart
 releases/wave-os-v1.[4-9]*.kpart
 releases/wave-os-v[2-9].*.kpart
+update_key.txt
+update_key.h
+wave-log.txt

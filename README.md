@@ -40,3 +40,12 @@ Packages: `gcc-aarch64-linux-gnu device-tree-compiler u-boot-tools vboot-kernel-
     git checkout master          # return to latest
 
 Or flash any file from `releases/`. ChromeOS on the internal drive is never touched: Ctrl+D always boots it.
+
+## Updating over the network (netboot)
+
+Once the Chromebook is on the network: on the PC run `start-updateserver.bat` (serves the newest `Image` plus a signed
+manifest on port 8000) and on the Chromebook type `update <PC address>`. wave-os downloads the image to RAM, checks its
+size, SHA-256 and an HMAC-SHA256 signature (`update_key.txt`, created by the build and kept out of git), then jumps into it.
+Nothing is written to storage, so a bad update is fixed by rebooting. `start-logserver.bat` collects log lines the
+Chromebook sends over UDP (port 5140) into `wave-log.txt`. Both run in PowerShell; Windows asks once to allow them
+through the firewall (choose private networks).

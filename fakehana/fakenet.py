@@ -7,10 +7,11 @@ The card is a handful of MMIO registers (fake-only; it does not exist on the rea
 The LAN: gateway 192.168.4.1 (DHCP server, answers ARP and ping), a PC at 192.168.4.10 (answers ARP and ping,
 collects UDP log lines on port 5140, echoes UDP port 7), and the guest gets 192.168.4.50.
 """
-import struct
+import hashlib, hmac, os, struct
 
 GW_MAC, PC_MAC = bytes.fromhex('0250434a0001'), bytes.fromhex('0250434a0010')
 GW_IP, PC_IP, GUEST_IP = '192.168.4.1', '192.168.4.10', '192.168.4.50'
+GUEST_MAC = bytes.fromhex('020000000002')
 
 def ip2b(s): return bytes(int(x) for x in s.split('.'))
 def csum(b):
@@ -28,6 +29,9 @@ class FakeNet:
         self.log_lines = []         # UDP log lines the "PC" received
         self.events = []            # human readable trace
         self.pings = 0
+        self.routes = {}            # HTTP server on the fake PC (port 8000): path -> bytes
+        self.conns = {}             # guest port -> server state
+        self.http_log = []
 
     # ---- MMIO ----
     def read(self, off):
@@ -80,12 +84,50 @@ class FakeNet:
             if dport == 7:
                 u = struct.pack('>HHHH', 7, sport, 8 + len(data), 0) + data
                 self.send(self.ip_packet(dstip, srcip, 17, u, src, GW_MAC if dstip == GW_IP else PC_MAC)); return
+        if proto == 6 and dstip == PC_IP and len(p) >= 20:
+            return self.tcp_server(src, p)
         if proto == 1 and p and p[0] == 8 and dstip in (GW_IP, PC_IP):        # ping
             self.pings += 1
             r = bytearray(p); r[0] = 0; r[2:4] = b'\0\0'; struct.pack_into('>H', r, 2, csum(bytes(r)))
             self.events.append('ping to %s answered' % dstip)
             self.send(self.ip_packet(dstip, srcip, 1, bytes(r), src, GW_MAC if dstip == GW_IP else PC_MAC))
 
+
+    # ---- a tiny TCP/HTTP server on the fake PC (port 8000) ----
+    def tcp_packet(self, sport, dport, seq, ack, flags, data=b'', mss=False):
+        hl = 24 if mss else 20
+        h = bytearray(struct.pack('>HHIIBBHHH', sport, dport, seq & 0xffffffff, ack & 0xffffffff, (hl // 4) << 4, flags, 65535, 0, 0))
+        if mss: h += struct.pack('>BBH', 2, 4, 1460)
+        seg = bytes(h) + data
+        ph = ip2b(PC_IP) + ip2b(GUEST_IP) + struct.pack('>BBH', 0, 6, len(seg))
+        struct.pack_into('>H', h, 16, csum(ph + seg)); seg = bytes(h) + data
+        return self.ip_packet(PC_IP, GUEST_IP, 6, seg, GUEST_MAC, PC_MAC)
+
+    def tcp_server(self, srcmac, p):
+        sport, dport, seq, ack, off, fl = struct.unpack('>HHIIBB', p[:14]); hl = (off >> 4) * 4; data = p[hl:]
+        if dport != 8000: return
+        st = self.conns.get(sport)
+        if fl & 2:                                                          # SYN
+            st = self.conns[sport] = dict(snd=5000, rcv=seq + 1, sent=False)
+            self.send(self.tcp_packet(8000, sport, st['snd'], st['rcv'], 18, mss=True)); st['snd'] += 1
+            return
+        if not st: return
+        if data and not st['sent']:
+            st['rcv'] = seq + len(data); st['sent'] = True
+            line = data.split(b'\r\n')[0].decode(errors='replace'); path = line.split(' ')[1] if ' ' in line else '/'
+            self.http_log.append(path)
+            body = self.routes.get(path)
+            if body is None: resp = b'HTTP/1.0 404 Not Found\r\nContent-Length: 0\r\n\r\n'
+            else: resp = b'HTTP/1.0 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: %d\r\n\r\n' % len(body) + body
+            self.events.append('http GET %s -> %d bytes' % (path, len(resp)))
+            for i in range(0, len(resp), 1460):
+                chunk = resp[i:i + 1460]; last = i + 1460 >= len(resp)
+                self.send(self.tcp_packet(8000, sport, st['snd'], st['rcv'], 25 if last else 24, chunk))        # ACK|PSH (+FIN on the last)
+                st['snd'] += len(chunk)
+            st['snd'] += 1                                                  # the FIN
+            return
+        if fl & 1:                                                          # guest FIN: acknowledge it
+            self.send(self.tcp_packet(8000, sport, st['snd'], seq + 1, 16))
     def dhcp(self, guest_mac, d):
         if len(d) < 240: return
         xid = d[4:8]; mt = 0; i = 240
