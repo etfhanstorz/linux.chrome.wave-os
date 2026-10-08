@@ -19,11 +19,23 @@ static void cmd_info(void) {
     outs("EL"); out('0' + (el >> 2)); outs(", fb "); put_dec(con_fb.w); out('x'); put_dec(con_fb.h);
     outs(" @ "); put_hex(con_fb.addr); outs(", console "); put_dec(con_cols); out('x'); put_dec(con_rows); out('\n');
 }
+static void run_cmd2(char *line, char *arg);
 static void run_cmd(char *line) {
     char *arg = line;
     while (*arg && *arg != ' ') arg++;
     if (*arg) { *arg++ = 0; while (*arg == ' ') arg++; }
     if (!*line) return;
+    char name[16]; { u32 q = 0; while (line[q] && q < 15) { name[q] = line[q]; q++; } name[q] = 0; }
+    sum_reset();
+    run_cmd2(line, arg);
+    if ((name[0] == 'w' && name[1] == 'i') || streq(name, "update") || streq(name, "cryptotest") || streq(name, "netdemo")) {   // one-line summary: command, what it says, error codes
+        outs("> "); outs(name); out(' ');
+        outs(sum_res[0] ? sum_res : cmd_codes_n ? "FAIL" : "ok");
+        if (cmd_codes_n) { outs(" e"); outs(cmd_codes); }
+        out('\n');
+    }
+}
+static void run_cmd2(char *line, char *arg) {
     if (streq(line, "help")) outs("commands: help version info echo color clear errors wifi wifion wififw wifiinit netdemo update wifichan wififind wifitry wifiv wifigap wifidiv wifiscan wifiscanm wifiscanblk wifiscan5 cryptotest reboot\n");
     else if (streq(line, "version")) outs(VERSION "\n");
     else if (streq(line, "info")) cmd_info();

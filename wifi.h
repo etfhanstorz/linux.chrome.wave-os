@@ -900,9 +900,10 @@ static int wifi_find(const char *name) {
     scan_cmd_ms = 10000;    wifi_event_hook = 0;
     scan_ssid_len = 0;
     grp[gn] = 0;
-    if (!have_target) { puts("N "); puts(grp); putc('\n'); return 0; }      // N + one char per scan: - no answer, a answered, e got events
-    puts("F ch"); put_dec(target.chan); putc(' '); puts(target.sec == 2 ? "WPA2" : target.sec == 1 ? "WPA" : target.sec == 3 ? "WEP" : "open");
-    puts(" -"); put_dec((u64)(target.rssi < 0 ? -target.rssi : target.rssi)); putc('\n');
+    if (!have_target) { sum_s("N "); sum_s(grp); return 0; }      // N + one char per scan: - no answer, a answered, e got events
+    sum_s("F ch"); { char t[4]; u32 c = target.chan, k = 0; if (c >= 100) t[k++] = '0' + c / 100 % 10; t[k++] = '0' + c / 10 % 10; t[k++] = '0' + c % 10; for (u32 q = 0; q < k; q++) sum_c(t[q]); }
+    sum_c(' '); sum_s(target.sec == 2 ? "WPA2" : target.sec == 1 ? "WPA" : target.sec == 3 ? "WEP" : "open");
+    { int d = target.rssi < 0 ? -target.rssi : target.rssi; sum_s(" -"); sum_c('0' + d / 10 % 10); sum_c('0' + d % 10); }
     if (wifi_verbose) { puts("  "); put_mac(target.bssid); putc('\n'); }
     return 1;
 }
@@ -960,7 +961,7 @@ static int wifi_chan(const char *arg) {
     }
     sb_no_bssmode = sb_no_ssid = sb_no_rates = sb_no_gap = sb_passive = sb_min = sb_ht = sb_probes = 0;
     wifi_event_hook = 0; scan_ssid_len = 0;
-    puts("R:"); puts(res); puts(" D:"); putc(dom_res); putc('\n');          // the whole result in one short line
+    sum_s("R:"); sum_s(res); sum_s(" D:"); sum_c(dom_res);                // the shell prints this on the one-line summary
     return 1;
 }
 // ---- v1.39: wifitry = scan with many read settings and print a scoreboard (looking for the setting that gets whole packets through) ----

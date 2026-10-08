@@ -49,7 +49,28 @@ static void put_code(const char *area, u32 num, u32 sub) {
 
 // Report an error once per boot (repeats of the same code are only counted). sub (1..9) names which of
 // several causes behind a code it was, shown as AREA.NN.sub (e.g. WIFI.09.2); 0 = the code has one cause.
+// One-line summary of the last command: sum_res = what the command says, cmd_codes = every error code it raised.
+static char sum_res[40]; static u32 sum_n;
+static char cmd_codes[48]; static u32 cmd_codes_n;
+static void sum_reset(void) { sum_n = 0; sum_res[0] = 0; cmd_codes_n = 0; cmd_codes[0] = 0; }
+static void sum_c(char c) { if (sum_n < sizeof sum_res - 1) { sum_res[sum_n++] = c; sum_res[sum_n] = 0; } }
+static void sum_s(const char *s) { while (*s) sum_c(*s++); }
+static void code_note(const char *area, u32 num, u32 sub) {
+    char t[8]; u32 k = 0;
+    t[k++] = area_digit(area); t[k++] = '.'; t[k++] = '0' + num / 10 % 10; t[k++] = '0' + num % 10;
+    if (sub) { t[k++] = '.'; t[k++] = '0' + sub % 10; }
+    t[k] = 0;
+    for (u32 i = 0; i + k <= cmd_codes_n; i++) {                       // already listed?
+        u32 j = 0; while (j < k && cmd_codes[i + j] == t[j]) j++;
+        if (j == k && (i + k == cmd_codes_n || cmd_codes[i + k] == ',')) return;
+    }
+    if (cmd_codes_n + k + 2 >= sizeof cmd_codes) return;
+    if (cmd_codes_n) cmd_codes[cmd_codes_n++] = ',';
+    for (u32 j = 0; j < k; j++) cmd_codes[cmd_codes_n++] = t[j];
+    cmd_codes[cmd_codes_n] = 0;
+}
 static void errs(const char *area, u32 num, u32 sub, const char *what) {
+    code_note(area, num, sub);
     for (u32 i = 0; i < err_count; i++)
         if (err_seen[i].num == num && err_seen[i].sub == sub && streq(err_seen[i].area, area)) return;
     if (err_count < sizeof err_seen / sizeof err_seen[0]) {
