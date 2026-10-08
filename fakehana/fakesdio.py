@@ -123,17 +123,20 @@ class FakeFirmwareLoader:
             body = d[12:12 + max(0, size - 8)]
         elif cmd == 0x0107:                              # EXT SCAN: ack now, results arrive as events (id 0x58)
             tl = d[12 + 4:12 + max(4, size - 8)]
-            p, chans = 0, []
+            p, chans, directed = 0, [], None
             while p + 4 <= len(tl):
                 ttype, tlen = struct.unpack_from('<HH', tl, p)
-                if ttype == 0x0112 and tlen >= 1 and tl[p + 4] != 32:
+                if ttype == 0x0112 and tlen >= 1 and tl[p + 4] == 0 and tlen > 1:
+                    directed = bytes(tl[p + 5:p + 4 + tlen])        # a scan for exactly this name
+                elif ttype == 0x0112 and tlen >= 1 and tl[p + 4] != 32:
                     silent = True                              # MODEL (real hana): max_ssid_length 0 = specific scan for an empty name: no answer
                 if ttype == 0x0101:
                     chans = [(tl[p + 4 + k * 6], tl[p + 4 + k * 6 + 1], tl[p + 4 + k * 6 + 2]) for k in range(tlen // 6)]
                 p += 4 + tlen
             ok = bool(chans) and all(m & 2 for _, _, m in chans)       # the channel filter must be disabled
             allaps = [(b'HomeNet', '02:11:22:33:44:01', -52, 6, True), (b'CoffeeShop-Guest', '02:11:22:33:44:02', -71, 1, False),
-                      (b'Neighbour5G', '02:11:22:33:44:03', -80, 149, True), (b'', '02:11:22:33:44:04', -85, 11, True)]
+                      (b'Neighbour5G', '02:11:22:33:44:03', -80, 149, True), (b'', '02:11:22:33:44:04', -85, 11, True),
+                      (b'HomeWifi', '02:11:22:33:44:05', -48, 6, True)]
 
             def mk(ssid, mac, rssi, ch, sec):
                 ies = bytes([0, len(ssid)]) + ssid + bytes([3, 1, ch]) + (bytes([48, 4, 1, 0, 0, 0]) if sec else b'')
@@ -143,7 +146,7 @@ class FakeFirmwareLoader:
                 info = struct.pack('<hhBBB', rssi, 0, 0, 0 if ch < 36 else 1, ch).ljust(18, b'\0')
                 t2 = struct.pack('<HH', 0x0157, len(info)) + info
                 return t1 + t2
-            mine = [a for a in allaps if ((a[3] >= 36) == (chans[0][0] == 1))] if ok else []
+            mine = [a for a in allaps if ((a[3] >= 36) == (chans[0][0] == 1)) and (directed is None or a[0] == directed)] if ok else []
             for i in range(0, max(1, len(mine)), 2):
                 part = mine[i:i + 2]
                 tlvs = b''.join(mk(*a) for a in part)

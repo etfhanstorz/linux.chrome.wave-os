@@ -775,14 +775,21 @@ static void wifi_poll_events(u32 ms) {
     }
 }
 
+static char scan_ssid[33]; static u32 scan_ssid_len;      // set by wififind: scan for this one name only
 static int scan_band(u32 radio, const u8 *chans, u32 nch) {
-    static u8 body[4 + 5 + 5 + 4 + 6 * 16 + 6 + 4 + 14];
+    static u8 body[4 + 5 + 5 + 40 + 4 + 6 * 16 + 6 + 4 + 14];
     static const u8 rates24[] = {0x82, 0x84, 0x8b, 0x96, 0x0c, 0x12, 0x18, 0x24, 0x30, 0x48, 0x60, 0x6c};
     static const u8 rates5[] = {0x8c, 0x12, 0x98, 0x24, 0xb0, 0x48, 0x60, 0x6c};
     u32 p = 0;
     put16(body, 0); put16(body + 2, 0); p = 4;                      // u32 reserved
     put16(body + p, 0x01ce); put16(body + p + 2, 1); body[p + 4] = 3; p += 5;            // BSS mode TLV: any
+    if (scan_ssid_len) {                                                                  // directed scan: only networks with exactly this name (max_ssid_length 0 + the name)
+        put16(body + p, 0x0112); put16(body + p + 2, 1 + scan_ssid_len); body[p + 4] = 0;
+        for (u32 i = 0; i < scan_ssid_len; i++) body[p + 5 + i] = (u8)scan_ssid[i];
+        p += 5 + scan_ssid_len;
+    } else {
     put16(body + p, 0x0112); put16(body + p + 2, 1); body[p + 4] = 32; p += 5;           // wildcard SSID TLV: max length 32 = scan for ANY name (0 would mean 'this exact, empty name': v1.14 got no answer)
+    }
     put16(body + p, 0x0101); put16(body + p + 2, nch * 6); p += 4;                       // channel list TLV
     for (u32 i = 0; i < nch; i++) {
         body[p] = radio; body[p + 1] = chans[i]; body[p + 2] = 0x02;                      // active, channel filter disabled
@@ -845,6 +852,42 @@ static int wifi_scan(int with5) {
     }
     return 1;
 }
+// ---- v1.40: wififind NAME = directed scan. Asks the chip for ONE network by name, so the answer is a tiny packet that
+// reads cleanly (big multi-network scan packets lose bytes on hana). Remembers the result for the join.
+static struct ap target; static int have_target;
+static void ap_copy(struct ap *d, const struct ap *s) { volatile u8 *dd = (volatile u8 *)d; const u8 *ss = (const u8 *)s; for (u32 i = 0; i < sizeof *d; i++) dd[i] = ss[i]; }   // bytewise: a plain struct copy makes the compiler call memcpy, which does not exist here
+static int wifi_find(const char *name) {
+    u32 l = 0;
+    while (name[l] && l < 32) { scan_ssid[l] = name[l]; l++; }
+    scan_ssid[l] = 0; scan_ssid_len = l;
+    if (!l) { puts("usage: wififind NAME\n"); return 0; }
+    if (!wifi_ready && !wifi_init()) { scan_ssid_len = 0; return 0; }
+    u8 r[8]; u32 n = 0;
+    static const u8 macctl[6] = {0x13, 0x00, 0x00, 0x00, 0x00, 0x00};
+    wifi_cmd(0x0028, macctl, sizeof macctl, r, sizeof r, &n);
+    static const u8 ch24[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
+    static const u8 ch5[] = {36, 40, 44, 48, 149, 153, 157, 161, 165};
+    nap = 0; scan_events = 0; scan_bytes = 0; dbg_taken = 0; raw_taken = 0; ev_log = 0; recs_seen = 0; mb_fail = 0;
+    wifi_event_hook = scan_event;
+    have_target = 0;
+    puts("looking for "); puts(scan_ssid); puts(" on 2.4 GHz...\n");
+    scan_band(0, ch24, sizeof ch24);
+    for (u32 i = 0; i < nap && !have_target; i++) if (streq(aps[i].ssid, scan_ssid)) { ap_copy(&target, &aps[i]); have_target = 1; }
+    for (u32 i = 0; i < sizeof ch5 && !have_target; i += 4) {
+        u32 n5 = sizeof ch5 - i < 4 ? sizeof ch5 - i : 4;
+        puts("looking on 5 GHz channels "); put_dec(ch5[i]); puts("...\n");
+        if (!scan_band(1, ch5 + i, n5)) break;
+        for (u32 k = 0; k < nap && !have_target; k++) if (streq(aps[k].ssid, scan_ssid)) { ap_copy(&target, &aps[k]); have_target = 1; }
+    }
+    wifi_event_hook = 0;
+    scan_ssid_len = 0;
+    puts("events "); put_dec(scan_events); puts("  recs "); put_dec(recs_seen); putc('\n');
+    if (!have_target) { puts("not found: "); puts(scan_ssid); putc('\n'); return 0; }
+    puts("FOUND "); puts(target.ssid); puts("  ch "); put_dec(target.chan); puts("  -"); put_dec((u64)(target.rssi < 0 ? -target.rssi : target.rssi)); puts(" dBm  ");
+    puts(target.sec == 2 ? "WPA2" : target.sec == 1 ? "WPA" : target.sec == 3 ? "WEP?" : "open");
+    puts("  "); put_mac(target.bssid); putc('\n');
+    return 1;
+}
 // ---- v1.39: wifitry = scan with many read settings and print a scoreboard (looking for the setting that gets whole packets through) ----
 static int ci_eq(const char *s, const char *want) {                 // does s contain `want`, ignoring case?
     for (u32 i = 0; s[i]; i++) {
@@ -883,7 +926,7 @@ static int wifi_try(void) {
         put_dec(t + 1); puts("    "); put_dec((u64)tries[t].mode); puts("    "); put_dec(tries[t].chunk); puts("   "); put_dec(tries[t].div);
         puts(" | "); put_dec(scan_events); puts("      "); put_dec(full); puts("    "); put_dec(recs_seen); puts("    "); put_dec(nap); puts("    ");
         puts(ok ? (home ? "YES" : "no") : "ERR"); putc('\n');
-        if (recs_seen > best_recs || (recs_seen == best_recs && home)) { best = (int)t; best_recs = recs_seen; best_nap = nap; for (u32 i = 0; i < nap; i++) best_aps[i] = aps[i]; }
+        if (recs_seen > best_recs || (recs_seen == best_recs && home)) { best = (int)t; best_recs = recs_seen; best_nap = nap; for (u32 i = 0; i < nap; i++) ap_copy(&best_aps[i], &aps[i]); }
     }
     wifi_event_hook = 0;
     wifi_read_bytes = 1; rd_chunk = 512; rd_div = 0;
