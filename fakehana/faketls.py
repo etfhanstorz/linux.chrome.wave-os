@@ -83,10 +83,10 @@ class FakeTLS:
                 self.log.append('tls read error: %s' % e)
             if b'\r\n\r\n' in c['req']:
                 path = c['req'].split(b' ')[1].decode(errors='replace')
-                status, extra, body = self.net.web.get(path, (404, '', b'<html><body><h1>Not Found</h1></body></html>'))
+                status, extra, body = self.net.page(c['req'], path)
                 resp = ('HTTP/1.0 %d X\r\nContent-Type: text/html\r\n%sContent-Length: %d\r\n\r\n' % (status, extra, len(body))).encode() + body
                 obj.write(resp)
-                self.log.append('https GET %s -> %d bytes' % (path, len(resp)))
+                self.log.append('https GET %s -> %d, %d bytes' % (path[:90], status, len(resp)))
                 c['done'] = True
                 try:
                     obj.unwrap()                                     # close_notify

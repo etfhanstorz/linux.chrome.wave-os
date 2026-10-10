@@ -33,7 +33,7 @@ class FakeNet:
         self.conns = {}             # guest port -> server state
         self.http_log = []
         self.dns_names = {'example.test': PC_IP, 'site.test': PC_IP, 'example.com': PC_IP, 'pool.ntp.org': PC_IP, 'secure.test': PC_IP}   # the router's DNS: these names exist, everything else does not
-        self.web = {}                                # port 80 on the fake PC: path -> (status, extra headers, body)
+        self.web = {}                                # port 80 on the fake PC: path (or host+path, for saved real sites) -> (status, extra headers, body)
 
     # ---- MMIO ----
     def read(self, off):
@@ -56,6 +56,33 @@ class FakeNet:
 
     # ---- the fake LAN ----
     def send(self, frame): self.rx.append(frame)
+
+    def page(self, req, path):
+        """The fake web server's answer for a request: a saved real site (by Host + path) first, then the test pages (by path)."""
+        host = ''
+        for ln in req.split(b'\r\n')[1:]:
+            if ln.lower().startswith(b'host:'): host = ln[5:].strip().decode(errors='replace').split(':')[0].lower(); break
+        return self.web.get(host + path) or self.web.get(path) or (404, '', b'<html><body><h1>Not Found</h1></body></html>')
+
+    def load_sites(self, root):
+        """Serve every site saved by tools/grab_site.py (fakehana/sites/NAME/routes.json) under its real names."""
+        import json, os
+        if not os.path.isdir(root): return 0
+        n = 0
+        for name in sorted(os.listdir(root)):
+            rj = os.path.join(root, name, 'routes.json')
+            if not os.path.exists(rj): continue
+            for key, r in json.load(open(rj)).items():
+                host = key.split('/')[0]
+                self.dns_names[host] = PC_IP
+                if r['type'].startswith('redirect:'):
+                    self.web[key] = (301, 'Location: %s\r\n' % r['type'][9:], b'moved')
+                else:
+                    ct = r['type'] or 'application/octet-stream'
+                    extra = '' if ct.startswith('text/html') else 'X-Type: %s\r\n' % ct
+                    self.web[key] = (200, extra, open(os.path.join(root, name, r['file']), 'rb').read())
+                n += 1
+        return n
 
     def eth(self, dst, src, typ, payload): return dst + src + struct.pack('>H', typ) + payload
 
@@ -162,7 +189,7 @@ class FakeNet:
             line = data.split(b'\r\n')[0].decode(errors='replace'); path = line.split(' ')[1] if ' ' in line else '/'
             self.http_log.append(path)
             if port == 80:                                      # the fake web server: (status, extra headers, body)
-                status, extra, body = self.web.get(path, (404, '', b'<html><body><h1>Not Found</h1></body></html>'))
+                status, extra, body = self.page(data, path)
                 resp = ('HTTP/1.0 %d X\r\nContent-Type: text/html\r\n%sContent-Length: %d\r\n\r\n' % (status, extra, len(body))).encode() + body
             else:
                 body = self.routes.get(path)

@@ -204,6 +204,8 @@ class Machine:
             b'<div style="max-height:0;overflow:hidden">collapsed menu (not shown)</div>'
             b'</div></div></body></html>')
         page = page.replace(b'<li>First item</li>', b'<li>First item</li><li><a href="/css.html">a styled page</a></li><li><a href="/layout.html">a layout page</a></li>')
+        nsites = self.net.load_sites(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'sites'))   # real pages saved by tools/grab_site.py
+        if nsites: print('fake web: %d files from saved real sites' % nsites)
         img = args.update_image
         if img and os.path.exists(img):                # the fake PC's update server: /Image and a signed /manifest
             data = open(img, 'rb').read()
@@ -599,7 +601,8 @@ def main():
     if m.net.events:
         print('  fake LAN: ' + '; '.join(m.net.events[:12]))
     if getattr(m.net, 'tls', None):
-        print('  fake https server: ' + '; '.join(m.net.tls.log[-6:]))
+        gets = [l for l in m.net.tls.log if l.startswith('https GET')]
+        print('  fake https server: %d requests' % len(gets) + ''.join('\n    ' + l for l in gets[-30:]))
     if m.msdc.loader and m.msdc.loader.ap:
         print('  fake router: ' + '; '.join(m.msdc.loader.ap.log[-10:]) + '; keys installed: ' + ', '.join('%s %s' % (k, 'ok' if ok else 'REJECTED') for k, ok, _ in m.msdc.loader.keys_set))
     if m.keys:
