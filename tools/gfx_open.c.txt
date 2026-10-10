@@ -1,0 +1,177 @@
+static void g_open(const char *tn, const char *idv, const char *clsv, const char *stylev, const char *href, int closing_void) {
+    (void)closing_void;
+    if (gsp + 1 >= GSTACK) return;
+    struct gnode *par = &gstk[gsp], *e = &gstk[gsp + 1];
+    u32 k = 0; while (tn[k] && k < 11) { e->tag[k] = tn[k]; k++; } e->tag[k] = 0;
+    e->htag = g_hash(tn, k); e->hid = idv[0] ? g_hash(idv, g_slen(idv)) : 0;
+    e->ncls = 0;
+    for (u32 i = 0; clsv[i] && e->ncls < 4;) { while (clsv[i] == ' ') i++; u32 s = i; while (clsv[i] && clsv[i] != ' ') i++; if (i > s) e->hcls[e->ncls++] = g_hash(clsv + s, i - s); }
+    e->s = par->s; e->s.block = 0; e->s.imgw = e->s.imgh = 0;
+    e->bgitem = e->blitem = e->britem = e->ibitem = 0xffffffff; e->pb = e->bb = e->mb = e->minh = 0; e->ibpr = e->ibmr = 0;
+    struct gstyle *s = &e->s;
+    int fs = par->s.size;
+    // HTML defaults (Chrome's built-in style sheet); ua[] = margin top/right/bottom/left, padding x4, border x4 in pixels
+    int ua[12]; for (u32 q = 0; q < 12; q++) ua[q] = 0;
+    u32 ua_bcol = 0xffffffff;
+    if (tn[0] == 'h' && tn[1] >= '1' && tn[1] <= '6' && !tn[2]) {
+        static const u16 em[6] = {200, 150, 117, 100, 83, 67}, mg[6] = {67, 83, 100, 133, 167, 233};
+        u32 sz = (u32)fs * em[tn[1] - '1'] / 100; s->size = (u8)(sz > 60 ? 60 : sz < 8 ? 8 : sz); s->bold = 1;
+        ua[0] = ua[2] = s->size * mg[tn[1] - '1'] / 100;
+    }
+    else if (tag_is(tn, "b") || tag_is(tn, "strong") || tag_is(tn, "th")) s->bold = 1;
+    else if (tag_is(tn, "pre")) { s->mono = 1; s->pre = 1; s->size = 13; ua[0] = ua[2] = 13; }
+    else if (tag_is(tn, "code") || tag_is(tn, "kbd") || tag_is(tn, "samp") || tag_is(tn, "tt")) { s->mono = 1; s->size = 13; }
+    else if (tag_is(tn, "small") || tag_is(tn, "sub") || tag_is(tn, "sup")) s->size = (u8)(fs * 5 / 6);
+    else if (tag_is(tn, "a") && href[0]) { s->color = 0x0000ee; s->under = 1; }
+    else if (tag_is(tn, "u") || tag_is(tn, "ins")) s->under = 1;
+    else if (tag_is(tn, "center")) s->align = 1;
+    else if (tag_is(tn, "ul") || tag_is(tn, "ol")) {
+        int nested = tag_is(par->tag, "li") || tag_is(par->tag, "ul") || tag_is(par->tag, "ol");
+        if (!nested) ua[0] = ua[2] = fs;
+        ua[7] = 40; s->list_n = 0; s->list_ol = tag_is(tn, "ol") ? 1 : 0;
+    }
+    else if (tag_is(tn, "p") || tag_is(tn, "dl")) ua[0] = ua[2] = fs;
+    else if (tag_is(tn, "blockquote") || tag_is(tn, "figure")) { ua[0] = ua[2] = fs; ua[1] = ua[3] = 40; }
+    else if (tag_is(tn, "dd")) ua[3] = 40;
+    else if (tag_is(tn, "body")) ua[0] = ua[1] = ua[2] = ua[3] = 8;
+    else if (tag_is(tn, "hr")) { ua[0] = ua[2] = 8; ua[8] = ua[9] = ua[10] = ua[11] = 1; ua_bcol = 0xc8c8c8; }
+    else if (tag_is(tn, "td") || tag_is(tn, "th")) ua[4] = ua[5] = ua[6] = ua[7] = 1;
+    else if (tag_is(tn, "script") || tag_is(tn, "style") || tag_is(tn, "head") || tag_is(tn, "noscript") || tag_is(tn, "template") || tag_is(tn, "svg") || tag_is(tn, "iframe") || tag_is(tn, "select") || tag_is(tn, "button") || tag_is(tn, "input") || tag_is(tn, "textarea") || tag_is(tn, "dialog")) s->hidden = 1;
+    int block = g_is_block(tn);
+    // CSS: for each property the winning declaration (!important, then style="", then specificity, then the later rule)
+    gsp++;
+    u32 have = 0; u64 rank[CP_NBITS];
+    struct crule best;
+    if (crule_next && ncrules) {
+        u32 bk[8], nb = 0;
+        #define ADDB(x) do { u32 b_ = (x) & 4095, d_ = 0; for (u32 q_ = 0; q_ < nb; q_++) if (bk[q_] == b_) d_ = 1; if (!d_) bk[nb++] = b_; } while (0)
+        if (e->hid) ADDB(e->hid);
+        for (u32 q = 0; q < e->ncls; q++) ADDB(e->hcls[q]);
+        ADDB(e->htag); ADDB(0);
+        #undef ADDB
+        for (u32 bi = 0; bi < nb; bi++)
+            for (u32 r = crule_head[bk[bi]]; r != 0xffffffff; r = crule_next[r]) {
+                struct crule *cr = &crules[r];
+                if (!c_match(cr, gsp)) continue;
+                u64 base = (u64)cr->spec << 24 | cr->order;
+                for (u32 m = cr->set; m; m &= m - 1) {
+                    u32 b = (u32)__builtin_ctz(m), bit = 1u << b;
+                    u64 rk = base | ((cr->imp & bit) ? 1ull << 42 : 0);
+                    if ((have & bit) && rk < rank[b]) continue;
+                    have |= bit; rank[b] = rk; c_take(&best, cr, b);
+                }
+            }
+    }
+    if (stylev[0]) {
+        struct crule in; in.set = 0; in.imp = 0; u32 sl = 0; while (stylev[sl]) sl++;
+        c_decls(stylev, sl, &in, par->s.size);
+        for (u32 m = in.set; m; m &= m - 1) {
+            u32 b = (u32)__builtin_ctz(m), bit = 1u << b;
+            u64 rk = 1ull << 41 | ((in.imp & bit) ? 1ull << 42 : 0);
+            if ((have & bit) && rk < rank[b]) continue;
+            have |= bit; rank[b] = rk; c_take(&best, &in, b);
+        }
+    }
+    if (have & CP_COLOR) s->color = best.color;
+    if (have & CP_SIZE) s->size = best.size;
+    if (have & CP_BOLD) s->bold = best.bold;
+    if (have & CP_ALIGN) s->align = best.align;
+    if (have & CP_DECO) s->under = best.deco;
+    if (have & CP_MONO) s->mono = best.mono;
+    if (have & CP_LIST) s->listnone = best.listnone;
+    if (have & CP_WS) { s->nowrap = best.ws == 1; s->pre = best.ws == 2; }
+    if (have & CP_DISPLAY) { if (best.display == 0) s->hidden = 1; else block = best.display == 1; }
+    s->block = (u8)block;
+    if (s->hidden) return;
+    // the box: margins, padding, borders (percentages are of the parent's width)
+    int pw = par->s.right - par->s.left; if (pw < 1) pw = 1;
+    int bxv[12]; for (u32 q = 0; q < 12; q++) bxv[q] = (have & CP_BOX(q)) ? best.box[q] : ua[q];
+    int mlauto = bxv[3] == LEN_AUTO, mrauto = bxv[1] == LEN_AUTO;
+    int m[4], pd[4], bd[4];
+    for (u32 q = 0; q < 4; q++) {
+        m[q] = c_res(bxv[q], pw);
+        pd[q] = c_res(bxv[4 + q], pw); if (pd[q] < 0) pd[q] = 0; if (pd[q] > 400) pd[q] = 400;
+        bd[q] = bxv[8 + q]; if (bd[q] < 0 || bd[q] >= 20000) bd[q] = 0;
+    }
+    u32 bcol = (have & CP_BCOL) ? best.bcolor : ua_bcol != 0xffffffff ? ua_bcol : s->color;
+    int wset = (have & CP_WIDTH) && best.width != LEN_AUTO;
+    if (!block) {                                                             // inline: <img> sizes; a background / padding drawn around the text
+        if (wset) s->imgw = c_res(best.width, pw);
+        if ((have & CP_MINH) && best.minh != LEN_AUTO) s->imgh = best.minh;
+        if (have & CP_BG) s->bg = best.bg;
+        int ml = m[3] > 0 ? m[3] : 0, mr = m[1] > 0 ? m[1] : 0, lp = pd[3] + bd[3], rp = pd[1] + bd[1];
+        if ((have & CP_BG) || lp || rp || ml || mr) {
+            if (g_pend_space && !g_line_empty) { g_x += aa_faces[g_face_index(&par->s)].g[0].adv; g_pend_space = 0; }
+            g_x += ml;
+            if (have & CP_BG) {
+                const struct aaface *f = &aa_faces[g_face_index(s)];
+                e->ibitem = gin; g_rect(g_x, g_y, 1, f->line + pd[0] + pd[2], best.bg);
+                if (e->ibitem < gin) { gi[e->ibitem].flags = 4; gi[e->ibitem].off = (u32)(f->ascent + pd[0]); }
+            }
+            e->ibx0 = g_x; e->ibline = g_line_no; e->ibpr = rp; e->ibmr = mr;
+            g_x += lp;
+        }
+        if (tag_is(tn, "br")) { if (g_line_empty) { const struct aaface *f = &aa_faces[g_face_index(s)]; g_add_line_metrics(f->ascent, f->line - f->ascent); g_line_empty = 0; } g_line_end(); }
+        return;
+    }
+    g_vspace(m[0] > 0 ? m[0] : 0);
+    int hp = pd[1] + pd[3] + bd[1] + bd[3], borderbox = (have & CP_BOXS) && best.boxs;
+    int bbw = pw - (mlauto ? 0 : m[3]) - (mrauto ? 0 : m[1]);
+    int sized = 0;
+    if (wset) { int w = c_res(best.width, pw); bbw = borderbox ? w : w + hp; sized = 1; }
+    if ((have & CP_MAXW) && best.maxw != LEN_AUTO) { int mw = c_res(best.maxw, pw); mw = borderbox ? mw : mw + hp; if (bbw > mw) { bbw = mw; sized = 1; } }
+    if (bbw < hp + 8) bbw = hp + 8;
+    int x0 = par->s.left + (mlauto ? 0 : m[3]);
+    if (sized && (mlauto || mrauto)) {                                        // margin: auto centres a box that has a width
+        int fr = pw - bbw - (mlauto ? 0 : m[3]) - (mrauto ? 0 : m[1]); if (fr < 0) fr = 0;
+        x0 = par->s.left + (mlauto && mrauto ? fr / 2 : mlauto ? fr : m[3]);
+    }
+    s->left = x0 + bd[3] + pd[3]; s->right = x0 + bbw - bd[1] - pd[1];
+    if (s->right < s->left + 8) s->right = s->left + 8;
+    e->bx = x0; e->bw = bbw; e->by = g_y; e->bcolor = bcol;
+    if (have & CP_BG) {
+        s->bg = best.bg;
+        if (tag_is(tn, "body") || tag_is(tn, "html")) gpage_bg = best.bg;
+        else { e->bgitem = gin; g_rect(x0, g_y, bbw, 1, best.bg); }
+    }
+    if (bd[0]) g_rect(x0, g_y, bbw, bd[0], bcol);
+    if (bd[3]) { e->blitem = gin; g_rect(x0, g_y, bd[3], 1, bcol); }
+    if (bd[1]) { e->britem = gin; g_rect(x0 + bbw - bd[1], g_y, bd[1], 1, bcol); }
+    g_y += bd[0] + pd[0]; if (bd[0] + pd[0]) g_last_margin = 0;
+    e->cy = g_y; e->pb = pd[2]; e->bb = bd[2]; e->mb = m[2] > 0 ? m[2] : 0;
+    if ((have & CP_MINH) && best.minh != LEN_AUTO && best.minh > 0) { e->minh = best.minh; if (borderbox) e->minh -= pd[0] + pd[2] + bd[0] + bd[2]; }
+    g_x = s->left; g_line_start = g_x; g_line_item = gin;
+    if (tag_is(tn, "li") && !(have & CP_DISPLAY) && !s->listnone) {          // the bullet / number
+        struct gstyle *ps = &par->s; ps->list_n++;
+        const struct aaface *f = &aa_faces[g_face_index(s)];
+        if (par->s.list_ol) {
+            char nb[12]; u32 v = ps->list_n, q = 0; char t[10]; u32 tc = 0; do { t[tc++] = (char)('0' + v % 10); v /= 10; } while (v); while (tc) nb[q++] = t[--tc]; nb[q++] = '.';
+            g_x = s->left - (int)g_text_w(f, nb, q) - 6; g_line_start = g_x; g_word(nb, q); g_x = s->left; g_line_start = s->left;
+        } else {
+            g_add_line_metrics(f->ascent, f->line - f->ascent); g_line_empty = 0;
+            int d = f->size / 3 + 1;
+            g_rect(s->left - 14, g_y + f->ascent - f->ascent / 2 - d / 2, d, d, s->color);
+        }
+    }
+}
+static void g_close_top(void) {
+    struct gnode *e = &gstk[gsp];
+    if (!e->s.hidden && e->s.block) {
+        g_line_end();
+        if (e->minh > 0 && g_y - e->cy < e->minh) g_y = e->cy + e->minh;
+        if (e->pb) { g_y += e->pb; g_last_margin = 0; }
+        if (e->bb) { g_rect(e->bx, g_y, e->bw, e->bb, e->bcolor); g_y += e->bb; g_last_margin = 0; }
+        int hgt = g_y - e->by; if (hgt < 0) hgt = 0; if (hgt > 65535) hgt = 65535;
+        if (e->bgitem < gin) gi[e->bgitem].h = (u16)hgt;
+        if (e->blitem < gin) gi[e->blitem].h = (u16)hgt;
+        if (e->britem < gin) gi[e->britem].h = (u16)hgt;
+        g_vspace(e->mb);
+        g_line_item = gin;
+    } else if (!e->s.hidden) {
+        g_x += e->ibpr;
+        if (e->ibitem < gin) { int w = g_line_no == e->ibline ? g_x - e->ibx0 : 0; gi[e->ibitem].w = (u16)(w > 0 ? w : 0); }
+        g_x += e->ibmr;
+    }
+    gsp--;
+    if (g_line_empty) { g_x = gstk[gsp].s.left; g_line_start = g_x; }
+}
