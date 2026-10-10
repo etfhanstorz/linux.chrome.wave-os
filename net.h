@@ -171,6 +171,15 @@ static const u8 *mac_for(u32 dst) {
     }
     return arp_lookup(target);
 }
+// A small packet to the router now and then (an ARP question for its own address): routers drop a device they have not heard from in ~5 minutes.
+static void net_keepalive(void) {
+    if (!net_ip || !net_gw) return;
+    static const u8 bcast[6] = {255, 255, 255, 255, 255, 255};
+    const u8 *m = arp_lookup(net_gw);
+    u8 a[28]; be16w(a, 1); be16w(a + 2, 0x0800); a[4] = 6; a[5] = 4; be16w(a + 6, 1);
+    mcopy(a + 8, net_mac, 6); be32w(a + 14, net_ip); mset(a + 18, 0, 6); be32w(a + 24, net_gw);
+    eth_send(m ? m : bcast, 0x0806, a, 28);
+}
 // ---- DHCP client ----
 static int dhcp_wait(u32 want_type, u32 xid, u32 ms) {
     u64 hz = tick_hz(), t0 = ticks();
