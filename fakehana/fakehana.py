@@ -152,6 +152,24 @@ class Machine:
         self.net.web['/'] = (200, '', page)
         self.net.web['/two.html'] = (200, '', b'<html><head><title>Page Two</title></head><body><h2>Page two</h2><p>You followed a link. <a href="/">Back to the start</a></p></body></html>')
         self.net.web['/old'] = (302, 'Location: /two.html\r\n', b'moved')
+        # a styled page (like a GitHub repo page) for the graphical renderer: <style>, an external stylesheet, classes, ids, inline style
+        self.net.web['/site.css'] = (200, 'Content-Type: text/css\r\n',
+            b'.header{background:#24292f;color:#ffffff;padding:12px 24px} .header a{color:#ffffff;font-weight:bold}\n'
+            b'#repo h1{font-size:28px;color:#0969da} .muted{color:#57606a} .box{border:1px solid #d0d7de;background-color:#f6f8fa}\n'
+            b'@media (max-width:500px){.header{display:none}} a:hover{color:red} .files li{margin:2px 0}\n')
+        self.net.web['/css.html'] = (200, '', b'<!DOCTYPE html><html><head><title>wave-os / wave-os</title>'
+            b'<link rel="stylesheet" href="/site.css"><style>body{font-family:sans-serif;margin:0} .readme h2{border-bottom:1px solid #d0d7de}'
+            b' code{background:#eff1f3} .tag{background:#ddf4ff;color:#0969da;padding:2px 8px}</style></head><body>'
+            b'<div class="header"><a href="/">wave-os</a> &nbsp; Pull requests &nbsp; Issues</div>'
+            b'<div id="repo"><h1>wave-os</h1><p class="muted">A bare-metal OS for the hana Chromebook. <span class="tag">aarch64</span> <span class="tag">os</span></p>'
+            b'<div class="box"><ul class="files"><li><a href="/two.html">fakehana</a> <span class="muted">fake Chromebook for testing</span></li>'
+            b'<li><a href="/two.html">tools</a> <span class="muted">flash, update and log helpers</span></li>'
+            b'<li><a href="/two.html">gfx.h</a> <span class="muted">v1.9: the graphical browser</span></li></ul></div>'
+            b'<div class="readme"><h2>README.md</h2><p>Boot it with <code>Ctrl+U</code> and type <code>help</code>.</p>'
+            b'<p style="color:#1a7f37;font-weight:bold">Inline style: green and bold.</p>'
+            b'<h3>Build</h3><pre>sh build.sh\nflash.bat</pre><ol><li>Build</li><li>Flash</li><li>Boot</li></ol>'
+            b'<p><img src="/pic.png" alt="logo"> Pictures sit in the text.</p></div></div></body></html>')
+        page = page.replace(b'<li>First item</li>', b'<li>First item</li><li><a href="/css.html">a styled page</a></li>')
         img = args.update_image
         if img and os.path.exists(img):                # the fake PC's update server: /Image and a signed /manifest
             data = open(img, 'rb').read()
