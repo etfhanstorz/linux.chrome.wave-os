@@ -195,6 +195,13 @@ class Machine:
             b'<tr><td colspan="3" bgcolor="#ffffcc">a cell across all three columns</table>'
             b'<div class="row"><div class="cell">table-cell A</div><div class="cell">table-cell B</div></div>'
             b'<div class="center"><div>centred</div><div>column items</div></div>'
+            b'<form style="margin:12px 0"><input type="text" placeholder="Search..."> <input type="submit" value="Go"> <button>Button</button> '
+            b'<select><option>First choice</option><option>Second</option></select> <input type="checkbox"> <input type="radio"> <input type="hidden" value="x"></form>'
+            b'<p style="line-height:2;text-transform:uppercase">tall lines, upper case</p>'
+            b'<p><span style="background:#ddf4ff;border-radius:12px;padding:2px 10px">rounded pill</span> '
+            b'<svg width="16" height="16" viewBox="0 0 16 16"><path d="M0 0h16v16H0z"/></svg> icon space</p>'
+            b'<div style="border:2px solid #0969da;border-radius:8px;padding:8px;background:#f6f8fa">a rounded box</div>'
+            b'<div style="max-height:0;overflow:hidden">collapsed menu (not shown)</div>'
             b'</div></div></body></html>')
         page = page.replace(b'<li>First item</li>', b'<li>First item</li><li><a href="/css.html">a styled page</a></li><li><a href="/layout.html">a layout page</a></li>')
         img = args.update_image
