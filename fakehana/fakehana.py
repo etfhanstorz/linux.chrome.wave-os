@@ -186,6 +186,7 @@ class Machine:
             b'</style></head><body>'
             b'<div class="top"><span class="logo">Logo</span><a href="/">Home</a><a href="/two.html">Docs</a><a class="right" href="/two.html">Sign in</a></div>'
             b'<div class="wrap"><div class="side"><b>Sidebar</b><ul><li>One<li>Two<li>Three</ul></div><div class="main">'
+            b'<div style="float:right;width:200px;border:1px solid #d0d7de;background:#f6f8fa;padding:6px;margin:0 0 8px 12px">A float on the right: the text flows around it, like an infobox.</div>'
             b'<h2>Main area</h2><p>This column takes the rest of the width. <span class="btn">Button</span><span class="btn">Another</span> after the buttons.</p>'
             b'<div class="cards"><div class="card">Card one</div><div class="card">Card two has more text so it wraps onto a second line</div><div class="card">Card three</div>'
             b'<div class="card">Card four</div><div class="card">Card five</div></div>'
