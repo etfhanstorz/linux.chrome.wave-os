@@ -129,7 +129,10 @@ static void bar_draw(int browser) {
     char b[96]; bar_text(b);
     u32 n = 0; while (b[n]) n++;
     u32 bg = browser ? 0x1F3A5F : 0x1A2433, x0 = con_cols > n ? con_cols - n : 0;
+    static u32 last_x0 = 0xffffffff;
     if (!browser) { const char *l = " wave-os"; u32 x = 0; for (; l[x] && x < x0; x++) bar_cell(x, l[x], 0x40E0FF, bg); for (; x < x0; x++) bar_cell(x, ' ', C_TEXT, bg); }
+    else if (last_x0 < x0) for (u32 x = last_x0; x < x0; x++) bar_cell(x, ' ', C_TEXT, bg);   // the text got shorter: clear what it no longer covers
+    last_x0 = x0;
     for (u32 i = 0; i < n && x0 + i < con_cols; i++) {
         if (b[i] == '\x01') bar_wifi_icon(x0 + i, wifi_up, bg);
         else bar_cell(x0 + i, b[i], i < 30 && time_src != 2 && b[0] == '-' ? 0x808090 : 0xE0E6F0, bg);
