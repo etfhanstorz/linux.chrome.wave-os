@@ -174,7 +174,29 @@ class Machine:
             b'<p style="color:#1a7f37;font-weight:bold">Inline style: green and bold.</p>'
             b'<h3>Build</h3><pre>sh build.sh\nflash.bat</pre><ol><li>Build</li><li>Flash</li><li>Boot</li></ol>'
             b'<p><img src="/pic.png" alt="logo"> Pictures sit in the text.</p></div></div></body></html>')
-        page = page.replace(b'<li>First item</li>', b'<li>First item</li><li><a href="/css.html">a styled page</a></li>')
+        # side-by-side layouts: flexbox, grid, tables (also old HTML attributes and optional end tags), inline-blocks
+        self.net.web['/layout.html'] = (200, '', b'<!DOCTYPE html><html><head><title>Layout test</title><style>'
+            b'body{margin:0;font-family:sans-serif} .top{display:flex;align-items:center;gap:16px;background:#24292f;color:#fff;padding:8px 16px}'
+            b' .top a{color:#fff;text-decoration:none} .top .right{margin-left:auto} .logo{font-weight:bold;font-size:20px}'
+            b' .wrap{display:flex;gap:24px;padding:16px} .side{width:220px;flex-shrink:0;border:1px solid #d0d7de;padding:8px} .main{flex:1}'
+            b' .cards{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:12px 0} .card{border:1px solid #d0d7de;padding:8px;background:#f6f8fa}'
+            b' .btn{display:inline-block;padding:4px 12px;border:1px solid #1f883d;background:#2da44e;color:#fff;margin-right:8px}'
+            b' .row{display:table;width:100%} .cell{display:table-cell;padding:4px;border:1px solid #ccc}'
+            b' .center{display:flex;flex-direction:column;align-items:center;border:1px dashed #999;padding:8px}'
+            b'</style></head><body>'
+            b'<div class="top"><span class="logo">Logo</span><a href="/">Home</a><a href="/two.html">Docs</a><a class="right" href="/two.html">Sign in</a></div>'
+            b'<div class="wrap"><div class="side"><b>Sidebar</b><ul><li>One<li>Two<li>Three</ul></div><div class="main">'
+            b'<h2>Main area</h2><p>This column takes the rest of the width. <span class="btn">Button</span><span class="btn">Another</span> after the buttons.</p>'
+            b'<div class="cards"><div class="card">Card one</div><div class="card">Card two has more text so it wraps onto a second line</div><div class="card">Card three</div>'
+            b'<div class="card">Card four</div><div class="card">Card five</div></div>'
+            b'<table border="1" cellpadding="4" cellspacing="0"><tr><th>Name<th>Size<th>Note'
+            b'<tr><td>gfx.h<td align="right">60 KB<td>the renderer'
+            b'<tr><td>web.h<td align="right">30 KB<td valign="top">the browser, which loads pages and draws them'
+            b'<tr><td colspan="3" bgcolor="#ffffcc">a cell across all three columns</table>'
+            b'<div class="row"><div class="cell">table-cell A</div><div class="cell">table-cell B</div></div>'
+            b'<div class="center"><div>centred</div><div>column items</div></div>'
+            b'</div></div></body></html>')
+        page = page.replace(b'<li>First item</li>', b'<li>First item</li><li><a href="/css.html">a styled page</a></li><li><a href="/layout.html">a layout page</a></li>')
         img = args.update_image
         if img and os.path.exists(img):                # the fake PC's update server: /Image and a signed /manifest
             data = open(img, 'rb').read()
