@@ -154,14 +154,19 @@ class Machine:
         self.net.web['/old'] = (302, 'Location: /two.html\r\n', b'moved')
         # a styled page (like a GitHub repo page) for the graphical renderer: <style>, an external stylesheet, classes, ids, inline style
         self.net.web['/site.css'] = (200, 'Content-Type: text/css\r\n',
-            b'.header{background:#24292f;color:#ffffff;padding:12px 24px} .header a{color:#ffffff;font-weight:bold}\n'
-            b'#repo h1{font-size:28px;color:#0969da} .muted{color:#57606a} .box{border:1px solid #d0d7de;background-color:#f6f8fa}\n'
-            b'@media (max-width:500px){.header{display:none}} a:hover{color:red} .files li{margin:2px 0}\n')
-        self.net.web['/css.html'] = (200, '', b'<!DOCTYPE html><html><head><title>wave-os / wave-os</title>'
-            b'<link rel="stylesheet" href="/site.css"><style>body{font-family:sans-serif;margin:0} .readme h2{border-bottom:1px solid #d0d7de}'
-            b' code{background:#eff1f3} .tag{background:#ddf4ff;color:#0969da;padding:2px 8px}</style></head><body>'
-            b'<div class="header"><a href="/">wave-os</a> &nbsp; Pull requests &nbsp; Issues</div>'
-            b'<div id="repo"><h1>wave-os</h1><p class="muted">A bare-metal OS for the hana Chromebook. <span class="tag">aarch64</span> <span class="tag">os</span></p>'
+            b':root{--fg-muted:#57606a;--accent:#0969da;--border:1px solid #d0d7de} *{box-sizing:border-box}\n'
+            b'.header{background:#24292f;color:#ffffff;padding:16px 32px} .header a{color:#ffffff;font-weight:bold;text-decoration:none}\n'
+            b'.nav{list-style:none;padding:0;margin:0} .nav li{display:inline;margin-right:16px}\n'
+            b'.container{max-width:900px;margin:0 auto;padding:0 16px} .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}\n'
+            b'#repo h1{font-size:28px;color:var(--accent)} .muted{color:var(--fg-muted, red)} .box{border:var(--border);background-color:#f6f8fa;padding:8px 16px;margin:16px 0}\n'
+            b'@media (max-width:500px){.header{display:none}} @media (min-width:800px){.wide-only{color:#1a7f37}} @media print{body{color:red}} a:hover{color:red} .files li{margin:2px 0}\n')
+        self.net.web['/css.html'] = (200, '', b'<!DOCTYPE html><html><head><title>Example Project</title>'
+            b'<link rel="stylesheet" href="/site.css"><style>body{font-family:sans-serif;margin:0} .readme h2{border-bottom:1px solid #d0d7de;padding-bottom:4px}'
+            b' code{background:#eff1f3;padding:1px 4px} .tag{background:#ddf4ff;color:#0969da;padding:2px 8px;margin-right:4px} p.warn{color:green!important} #w{color:red}</style></head><body>'
+            b'<div class="header"><ul class="nav"><li><a href="/">Example</a></li><li><a href="/two.html">Pull requests</a></li><li><a href="/two.html">Issues</a></li></ul></div>'
+            b'<div class="container" id="repo"><h1>example-project</h1><span class="sr-only">This text is for screen readers only</span><p hidden>hidden attribute</p>'
+            b'<p class="muted">A small sample project page for testing. <span class="tag">aarch64</span><span class="tag">os</span></p>'
+            b'<p class="wide-only">Green on a wide screen (@media min-width).</p><p class="warn" id="w">Green too (!important beats the #id rule).</p>'
             b'<div class="box"><ul class="files"><li><a href="/two.html">fakehana</a> <span class="muted">fake Chromebook for testing</span></li>'
             b'<li><a href="/two.html">tools</a> <span class="muted">flash, update and log helpers</span></li>'
             b'<li><a href="/two.html">gfx.h</a> <span class="muted">v1.9: the graphical browser</span></li></ul></div>'
