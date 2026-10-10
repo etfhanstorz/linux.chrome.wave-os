@@ -40,6 +40,7 @@ static void status_update(void) {
 static char area_digit(const char *a) {
     if (streq(a, "BOOT")) return '1'; if (streq(a, "LOG")) return '2'; if (streq(a, "DISP")) return '3';
     if (streq(a, "KB")) return '4'; if (streq(a, "EC")) return '5'; if (streq(a, "WIFI")) return '6'; if (streq(a, "NET")) return '7';
+    if (streq(a, "TP")) return '8';
     return '0';
 }
 static void put_code(const char *area, u32 num, u32 sub) {

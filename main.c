@@ -76,6 +76,7 @@ static void fill(const struct fb *f, u32 rgb) {
 #include "update.h"
 #include "log.h"
 #include "ec.h"
+#include "tp.h"                                        // the touchpad (Elan on I2C bus 4)
 #include "wpa.h"
 #include "bar.h"
 #include "tls.h"
