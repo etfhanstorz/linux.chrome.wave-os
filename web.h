@@ -273,6 +273,10 @@ static int url_resolve(const char *base, const char *href, char *out, u32 max) {
     return 1;
 }
 
+#include "gfx.h"
+static u32 web_gfx = 1;                                      // 1 = graphical view (fonts, colours, pictures), 0 = text view (key V switches)
+static u32 web_page_gfx;                                     // the page on screen was laid out graphically
+
 // ---- loading ----
 static void web_error_page(const char *title, const char *l1, const char *l2) {
     web_begin();
@@ -288,6 +292,7 @@ static int web_fetch(const char *url_in) {
     char url[300]; u32 k = 0; while (url_in[k] && k + 1 < sizeof url) { url[k] = url_in[k]; k++; } url[k] = 0;
     web_top = 0; web_sel = 0;
     img_bump = 0; web_img_shown = 0; for (u32 i = 0; i < WEB_MAXIMG; i++) web_img_pix[i] = 0;   // a new page: forget the old pictures
+    web_page_gfx = 0;
     for (int hops = 0; hops < 6; hops++) {
         struct url u;
         if (!url_parse(url, &u)) { errs("NET", 31, 1, "the address is not valid (it must start with http://)"); web_error_page("Bad address", "The address must start with http:// (for example http://example.com).", url); for (u32 i = 0; i < sizeof web_url - 1 && url[i]; i++) web_url[i] = url[i]; return 0; }
@@ -329,7 +334,11 @@ static int web_fetch(const char *url_in) {
         if (!is_html && !ci_prefix((const u8 *)http_ctype, "text/")) {
             web_line(S_HEAD, "Not a web page"); web_newline(); web_line(S_NORM, "wave-os can only show text and HTML pages."); web_line(S_DIM, http_ctype);
             web_finish();
-        } else if (is_html) { web_page_len = (u32)n; web_html(web_raw, (u32)n); }
+        } else if (is_html) {
+            web_page_len = (u32)n;
+            if (web_gfx) { g_collect_css(web_raw, (u32)n, url); web_status("laying out the page..."); g_layout(web_raw, (u32)n, (int)con_fb.w); web_page_gfx = 1; }
+            else web_html(web_raw, (u32)n);
+        }
         else web_plain(web_raw, (u32)n);
         if (http_status >= 400) { u32 t = 0; while (web_title[t]) t++; if (!t) { const char *e = "Error"; for (u32 q = 0; e[q]; q++) web_title[q] = e[q]; web_title[5] = 0; } }
         return 1;
@@ -378,8 +387,8 @@ static void web_load_images(const char *page_url) {
         web_img_pix[i] = pix; web_img_w[i] = w; web_img_h[i] = h; web_img_shown++;
     }
     if (web_img_shown) {                                                      // lay the page out again, now with room for the pictures
-        web_begin();
-        web_html(web_raw, web_page_len);
+        if (web_page_gfx) { web_status("laying out the page..."); g_layout(web_raw, web_page_len, (int)con_fb.w); }
+        else { web_begin(); web_html(web_raw, web_page_len); }
     }
 }
 
@@ -394,7 +403,7 @@ static u32 web_style_color(u32 s) { return s == S_HEAD ? 0x40E0FF : s == S_LINK 
 static char web_msg[60];
 static void web_hints(void) {
     char h[140]; u32 k = 0;
-    const char *a = " Up/Down/Space scroll  Left/Right link  Enter open  G address  F1 back  R reload  Q quit";
+    const char *a = " Up/Down/Space scroll  Left/Right link  Enter open  G address  F1 back  R reload  V view  Q quit";
     while (a[k] && k + 1 < sizeof h) { h[k] = a[k]; k++; } h[k] = 0;
     web_row(con_rows - 1, h, 0xB0B8C8, 0x1A2433, 0);
 }
@@ -415,6 +424,17 @@ static void web_draw(void) {
     web_row(0, tb, 0xFFFFFF, 0x1F3A5F, 0);
     web_status(web_msg);
     u32 rows = con_rows - 3;                                   // rows 2 .. con_rows-2
+    if (web_page_gfx) {
+        int vy0 = 2 * CH, vy1 = (con_rows - 1) * CH, vh = vy1 - vy0;
+        g_draw((int)web_top, vy0, vy1, web_sel);
+        char pb[40]; u32 pn = 0; u32 pct = gpage_h > vh ? (web_top * 100) / (u32)(gpage_h - vh) : 100; if (pct > 100) pct = 100;
+        { u32 v = pct, d[3], dc = 0; do { d[dc++] = v % 10; v /= 10; } while (v); while (dc) pb[pn++] = (char)('0' + d[--dc]); pb[pn++] = '%'; pb[pn++] = ' '; pb[pn++] = ' ';
+          v = w_nlinks; dc = 0; do { d[dc++] = v % 10; v /= 10; } while (v && dc < 3); while (dc) pb[pn++] = (char)('0' + d[--dc]); const char *l = " links"; for (u32 q = 0; l[q]; q++) pb[pn++] = l[q]; }
+        pb[pn] = 0;
+        web_hints(); bar_draw(1);
+        for (u32 i = 0; pb[i] && i < 30; i++) web_cell(con_cols - 1 - pn - 1 + i, con_rows - 1, pb[i], 0xE0E6F0, 0x1A2433);
+        return;
+    }
     for (u32 r = 0; r < rows; r++) {
         u32 li = web_top + r, y = 2 + r, x = 1;
         web_cell(0, y, ' ', C_TEXT, con_bg);
@@ -485,6 +505,11 @@ static void web_goto(const char *url, int remember) {
     log_ship();
 }
 static void web_scroll_to_link(void) {
+    if (web_page_gfx) {
+        int y = g_link_y(web_sel); u32 vh = (con_rows - 3) * CH;
+        if (y >= 0) { if ((u32)y < web_top + CH) web_top = (u32)(y > (int)CH ? y - (int)CH : 0); else if ((u32)y > web_top + vh - 2 * CH) web_top = (u32)y - vh / 2; }
+        return;
+    }
     for (u32 li = 0; li < wnl; li++) for (u32 i = wls[li]; i < wls[li + 1]; i++) if (wlk[i] == web_sel) {
         u32 rows = con_rows - 3;
         if (li < web_top) web_top = li; else if (li >= web_top + rows) web_top = li + 1 - rows;
@@ -493,6 +518,8 @@ static void web_scroll_to_link(void) {
 }
 static int web_run(const char *start) {
     web_raw = update_buf; wt = (char *)(update_buf + WEB_RAW_MAX); wsty = update_buf + WEB_RAW_MAX + WEB_TEXT_MAX; wlk = wsty + WEB_TEXT_MAX;
+    gtx = wt; gtmax = WEB_TEXT_MAX;                                           // the graphical view shares the text view's memory (only one is in use)
+    gi = (struct gitem *)(void *)wsty; gimax = (2 * WEB_TEXT_MAX) / sizeof(struct gitem);
     u32 keep_on = con_on; con_on = 0;                                         // while the browser runs, print() only logs (nothing is drawn over the page)
     con_clear();
     web_hist_n = 0; web_url[0] = 0; web_msg[0] = 0; web_title[0] = 0; wnl = 0;
@@ -502,16 +529,24 @@ static int web_run(const char *start) {
     for (;;) {
         int c = kb_getc();
         if (c < 0) { wdt_kick(); wifi_service(); bar_tick(1); continue; }
-        u32 rows = con_rows - 3, maxtop = wnl > rows ? wnl - rows : 0;
+        u32 rows = con_rows - 3, maxtop = wnl > rows ? wnl - rows : 0, step = 1, pagestep = rows - 1;
+        if (web_page_gfx) { u32 vh = (con_rows - 3) * CH; maxtop = (u32)gpage_h > vh ? (u32)gpage_h - vh : 0; step = 3 * CH / 2; pagestep = vh - 2 * CH; }
         int redraw = 1;
         if (c >= '0' && c <= '9' && numn < 4) { numbuf[numn++] = (char)c; numbuf[numn] = 0; char m[20] = "link number: "; u32 q = 13; for (u32 i = 0; i < numn; i++) m[q++] = numbuf[i]; m[q] = 0; web_status(m); continue; }
         if (c == '\n' && numn) { u32 v = 0; for (u32 i = 0; i < numn; i++) v = v * 10 + (u32)(numbuf[i] - '0'); numn = 0; if (v >= 1 && v <= w_nlinks) web_sel = v; else { web_status("no such link"); continue; } c = '\n'; }
         else if (numn && c != '\n') { numn = 0; web_msg[0] = 0; }
         if (c == 'q' || c == 27) break;
-        else if (c == K_DOWN) { if (web_top < maxtop) web_top++; }
-        else if (c == K_UP) { if (web_top) web_top--; }
-        else if (c == ' ') { web_top = web_top + rows - 1 > maxtop ? maxtop : web_top + rows - 1; }
-        else if (c == 'b') { web_top = web_top > rows - 1 ? web_top - (rows - 1) : 0; }
+        else if (c == K_DOWN) { web_top = web_top + step > maxtop ? maxtop : web_top + step; }
+        else if (c == K_UP) { web_top = web_top > step ? web_top - step : 0; }
+        else if (c == ' ') { web_top = web_top + pagestep > maxtop ? maxtop : web_top + pagestep; }
+        else if (c == 'b') { web_top = web_top > pagestep ? web_top - pagestep : 0; }
+        else if (c == 'v') {                                                  // switch between the graphical and the text view (same page, no download)
+            web_gfx = !web_gfx; web_top = 0; web_sel = 0;
+            if (web_page_len && (web_page_gfx || wnl)) {
+                if (web_gfx) { web_status("laying out the page..."); g_layout(web_raw, web_page_len, (int)con_fb.w); web_page_gfx = 1; }
+                else { web_page_gfx = 0; web_begin(); web_html(web_raw, web_page_len); }
+            }
+        }
         else if (c == 't') web_top = 0;
         else if (c == 'e') web_top = maxtop;
         else if (c == K_RIGHT || c == '\t') { if (w_nlinks) { web_sel = web_sel >= w_nlinks ? 1 : web_sel + 1; web_scroll_to_link(); } }
