@@ -108,3 +108,12 @@ the EC sent back (`EC_RES_*` in Linux `cros_ec_commands.h`).
 | **7.25** | update: the checksum does not match | Damaged download; try again |
 | **7.26** | update: the signature is wrong (not signed with our key) | Server uses a different key: copy update_key.txt |
 | **7.27** | update: not a valid arm64 image | |
+
+## 8 Touchpad (Elan on I2C bus 4)
+
+| Code | Meaning | What to try |
+|---|---|---|
+| **8.01** | the touchpad did not answer on I2C (no ACK at address 0x15) | Run `tp`: it also tries a HID-over-I2C pad at 0x2c; send its output |
+| **8.02** | the I2C controller did not finish a transfer | Clock or pins not set up; send the `tp` output |
+| **8.03.1** | the PMIC did not answer (touchpad power unknown) | Reboot |
+| **8.04** | the touchpad stopped answering after its reset | Try `tptest` again |
