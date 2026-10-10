@@ -19,11 +19,12 @@ def main():
     name, url = sys.argv[1], sys.argv[2]
     out = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'fakehana', 'sites', name)
     os.makedirs(out, exist_ok=True)
-    routes = {}
+    routes = {}; count = [0]
     def save(u, ctype, data):
         p = urllib.parse.urlsplit(u)
         key = p.hostname + (p.path or '/') + ('?' + p.query if p.query else '')
-        fn = '%03d' % len(routes)
+        if key in routes: return                                      # listed twice: saved once
+        fn = '%03d' % count[0]; count[0] += 1
         open(os.path.join(out, fn), 'wb').write(data)
         routes[key] = {'file': fn, 'type': ctype}
         print('%7d  %s' % (len(data), key))
