@@ -59,6 +59,7 @@ static int wifi_data_poll(u8 **frame, u32 *flen) {
     return 1;
 }
 
+static u32 wifi_ev_reason;
 // Read and discard one command-port packet if one waits (association and link events). Returns the event id, or 0.
 static u32 wifi_event_drain(void) {
     int st = fn1_rd(0x03);
@@ -67,7 +68,9 @@ static u32 wifi_event_drain(void) {
     u32 rx = ((u32)(l1 < 0 ? 0 : l1) << 8) | (u32)(l0 < 0 ? 0 : l0), blocks = (rx + 255) / 256;
     if (rx <= 4 || blocks * 256 > sizeof wbuf || sdio_read_port(WCMD_PORT, wbuf, blocks)) return 0;
     after_packet_read(rx);
-    return get16(wbuf + 2) == 3 ? get16(wbuf + 4) : 0xffff;
+    if (get16(wbuf + 2) != 3) return 0xffff;
+    wifi_ev_reason = rx >= 10 ? get16(wbuf + 8) : 0;                             // deauth / disassoc: the router's reason code
+    return get16(wbuf + 4);
 }
 
 // Does the router's RSN (WPA2) element offer what we can do: CCMP + PSK, no mandatory management-frame protection?

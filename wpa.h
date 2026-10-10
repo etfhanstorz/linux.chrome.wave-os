@@ -404,15 +404,22 @@ static void wifi_eapol_rx(const u8 *f, u32 fl) {
     con_on = keep;
 }
 // Returns 1 if it printed something on the screen (the shell then shows its prompt again).
-static u64 wifi_svc_next;
+static u64 wifi_svc_next, wifi_ka_next;
 static int wifi_service(void) {
     if (!wifi_up || !nic_recv) return 0;
     u64 hz = tick_hz(), now = ticks();
     if (hz && now < wifi_svc_next) return 0;
     wifi_svc_next = now + hz / 50;                                              // every 20 ms
     net_poll();                                                                 // answers ARP and pings, handles key refreshes
+    if (hz && now >= wifi_ka_next) { wifi_ka_next = now + hz * 60; net_keepalive(); }   // routers drop a device that is silent for ~5 minutes
     u32 ev = wifi_event_drain();
-    if (ev == 0x0003 || ev == 0x0008 || ev == 0x0009) { log_quiet(ev == 3 ? "wifi: the chip lost the link\n" : "wifi: the router disconnected us\n"); wifi_link_lost = 1; }
+    if (ev == 0x0003 || ev == 0x0008 || ev == 0x0009) {
+        static char m[64]; const char *a = ev == 3 ? "wifi: the chip lost the link" : "wifi: the router disconnected us (reason ";
+        u32 q = 0; while (a[q]) { m[q] = a[q]; q++; }
+        if (ev != 3) { char d[6]; u32 dc = 0, v = wifi_ev_reason; do { d[dc++] = (char)('0' + v % 10); v /= 10; } while (v && dc < 5); while (dc) m[q++] = d[--dc]; m[q++] = ')'; }
+        m[q++] = '\n'; m[q] = 0;
+        log_quiet(m); wifi_link_lost = 1;
+    }
     if (!wifi_link_lost) return 0;
     wifi_link_lost = 0; wifi_up = 0; wifi_drops++;
     if (!pmk_valid) { puts("\n(Wi-Fi dropped: type k to reconnect)\n"); return 1; }
