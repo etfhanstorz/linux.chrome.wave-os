@@ -39,7 +39,7 @@ foreach ($kind in @('sans', 'bold', 'mono')) {
             $g.Clear([System.Drawing.Color]::Black)
             $g.DrawString($s, $font, [System.Drawing.Brushes]::White, [float]$px * 0.5, [float]2, $sf)
             $adv = [math]::Round($g.MeasureString($s, $font, 1000, $sf).Width)
-            if ($c -eq 32) { $adv = [math]::Round($px * 0.32) }
+            if ($c -eq 32) { $adv = if ($kind -eq 'mono') { [math]::Round($g.MeasureString('M', $font, 1000, $sf).Width) } else { [math]::Round($px * 0.32) } }
             $minx = $cw; $maxx = -1; $miny = $ch; $maxy = -1
             for ($y = 0; $y -lt $ch; $y++) { for ($x = 0; $x -lt $cw; $x++) { if ($bmp.GetPixel($x, $y).R -gt 8) { if ($x -lt $minx) { $minx = $x }; if ($x -gt $maxx) { $maxx = $x }; if ($y -lt $miny) { $miny = $y }; if ($y -gt $maxy) { $maxy = $y } } } }
             $off = $bits.Count
