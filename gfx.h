@@ -25,19 +25,20 @@ static u32 g_text_w(const struct aaface *f, const char *s, u32 n) { u32 w = 0; f
 #define GI_TEXT 1
 #define GI_RECT 2
 #define GI_IMG 3
-struct gitem { int x, y; u16 w, h; u8 type, face, link, flags; u32 color, bg, off; u16 len; };   // flags: 1 = underline
+#define GI_BOX 4                                    // a box with rounded corners: color = background (flags 16: none), bg = border colour, off = border width, len = radius
+struct gitem { int x, y; u16 w, h; u8 type, face, link, flags; u32 color, bg, off; u16 len; };   // flags: 1 underline, 4 inline background, 8 placed with an inline-block; rects: len = radius (0x8000|N = N percent)
 static struct gitem *gi; static u32 gin, gimax;
 static char *gtx; static u32 gtn, gtmax;
 static int gpage_h; static u32 gpage_bg = 0xffffff;
 
 // ---------------- styles ----------------
-struct gstyle { u8 size, bold, mono, pre, align, hidden, under, block, listnone, nowrap, disp, tborder; u32 color, bg; int left, right; u32 link; u32 list_n; u8 list_ol; int imgw, imgh; short cellpad, tspace; };
+struct gstyle { u8 size, bold, mono, pre, align, hidden, under, block, listnone, nowrap, disp, tborder, tt, svg; u32 color, bg; int left, right; u32 link; u32 list_n; u8 list_ol; int imgw, imgh; short cellpad, tspace, lh; };
 // an open element: its style, and for boxes the pieces fixed at the end tag (background / side borders get their height then)
 struct gnode { char tag[12]; u32 htag, hid, hcls[4]; u32 ncls; struct gstyle s;
                u32 bgitem, blitem, britem, bbitem, bcolor; int bx, bw, by, cy, pb, bb, mb, mt, minh;     // block box
                u32 ibitem, ibline; int ibx0, ibpr, ibmr;                                     // inline box with a background / padding
                u32 ei, istart, cstart; int mx, mn, ext, wfix, ml, mr;                        // pass-1 element number, its display items, measuring
-               u8 cmode, atomic, aitems, va; int rowtop, rowbot, cursor, gapx, rgap, ccount; u32 mlo;   // cmode: 1 flex row, 2 column, 3 grid, 4 table row
+               u8 cmode, atomic, aitems, va, isbox; int rowtop, rowbot, cursor, gapx, rgap, ccount; u32 mlo;   // cmode: 1 flex row, 2 column, 3 grid, 4 table row
                int sv_ls, sv_asc, sv_desc, sv_empty, sv_y, sv_base; u32 sv_item, sv_plo; };           // inline-block: the line it interrupted
 #define GSTACK 256
 static struct gnode gstk[GSTACK]; static int gsp;
@@ -74,13 +75,17 @@ struct ccomp { u32 tag, id, cls[3]; u8 ncls; };
 #define CP_GRIDT (1ull << 37)
 #define CP_GSPAN (1ull << 38)
 #define CP_BCOLL (1ull << 39)
-#define CP_NBITS 40
+#define CP_RADIUS (1ull << 40)
+#define CP_LH (1ull << 41)
+#define CP_TT (1ull << 42)
+#define CP_NBITS 43
 #define LEN_AUTO (-32768)                           // lengths are pixels; 20000+N means N percent; LEN_AUTO = auto
 // display: 0 none 1 block 2 inline 3 inline-block 4 flex 5 inline-flex 6 grid 7 inline-grid 8 table 9 table-row 10 table-cell 11 list-item 13 row group
 #define GT_MAX 12                                   // grid-template-columns: up to 12 tracks (type 0 px, 1 percent, 2 fr x100, 3 auto); gt_n 255 = repeat(auto-fill, minmax(gt_min, 1fr))
 struct crule { struct ccomp c[4]; u8 nc; u64 set, imp; u16 spec; u32 order; u32 color, bg, bcolor; short box[12], width, maxw, minh;
                u8 size, sizerel, bold, align, display, deco, mono, listnone, boxs, ws;
-               u8 fdir, wrap, just, aitems, valign, bcoll, gspan, gt_n; short gap, rgap, grow, shrink, basis, gt_min; u8 gt_t[GT_MAX]; short gt_v[GT_MAX]; };
+               u8 fdir, wrap, just, aitems, valign, bcoll, gspan, gt_n; short gap, rgap, grow, shrink, basis, gt_min; u8 gt_t[GT_MAX]; short gt_v[GT_MAX];
+               short radius, lh; u8 tt; };                          // radius: px or 20000+percent; lh: 0 normal, >0 px, <0 -(ratio x100); tt: 1 upper 2 lower 3 capitalize
 static struct crule *crules; static u32 ncrules, crules_max;
 static u32 css_order;
 static int g_screen_w = 1366;                       // for @media (min-width / max-width)
@@ -286,6 +291,7 @@ static u32 c_expand(const char *v, u32 n, char *out, u32 max, int depth) {
 static void c_decls(const char *d, u32 n, struct crule *r, u32 parent_px) {
     u32 i = 0;
     int posabs = 0, tiny = 0, clipped = 0, offscreen = 0;                      // "screen reader only" text is hidden like Chrome hides it
+    int ovhidden = 0, zeroh = 0;                                               // overflow: hidden with no height: a collapsed menu
     static char vbuf[1024];
     while (i < n) {
         while (i < n && (c_ws(d[i]) || d[i] == ';')) i++;
@@ -354,6 +360,15 @@ static void c_decls(const char *d, u32 n, struct crule *r, u32 parent_px) {
             for (u32 k = 0; k + 4 < vn; k++) if (c_starts(v + k, vn - k, "span")) { u32 q = k + 4; while (q < vn && c_ws(v[q])) q++; u32 x = 0; while (q < vn && v[q] >= '0' && v[q] <= '9') x = x * 10 + (u32)(v[q++] - '0'); r->gspan = (u8)(x > 12 ? 12 : x); }
             for (u32 k = 0; k + 1 < vn; k++) if (v[k] == '-' && v[k + 1] == '1') r->gspan = 255;            // 1 / -1: the whole row
             r->set |= CP_GSPAN; }
+        else if (c_eq(p, pn, "border-radius")) { u32 ts[1], tl[1]; if (c_tokens(v, vn, ts, tl, 1) && c_len(v + ts[0], tl[0], &L) && L != LEN_AUTO && L >= 0) { r->radius = (short)L; r->set |= CP_RADIUS; } }
+        else if (c_eq(p, pn, "line-height")) {
+            int ok = 1; short val = 0;
+            if (!c_eq(v, vn, "normal")) { int unitless = vn > 0; for (u32 z = 0; z < vn; z++) if (!((v[z] >= '0' && v[z] <= '9') || v[z] == '.')) unitless = 0;
+                   if (unitless) val = (short)-(int)c_num100(v, vn); else if (c_len(v, vn, &L) && L != LEN_AUTO) val = (short)(L >= 20000 ? -(L - 20000) : L); else ok = 0; }
+            if (ok) { r->lh = val; r->set |= CP_LH; } }
+        else if (c_eq(p, pn, "text-transform")) { r->tt = c_starts(v, vn, "uppercase") ? 1 : c_starts(v, vn, "lowercase") ? 2 : c_starts(v, vn, "capitalize") ? 3 : 0; r->set |= CP_TT; }
+        else if (c_eq(p, pn, "overflow") || c_eq(p, pn, "overflow-y")) { if (c_starts(v, vn, "hidden") || c_starts(v, vn, "clip")) ovhidden = 1; }
+        else if (c_eq(p, pn, "max-height")) { if (c_len(v, vn, &L) && L == 0) zeroh = 1; }
         else if (c_eq(p, pn, "border-collapse")) { r->bcoll = c_starts(v, vn, "collapse") ? 1 : 0; r->set |= CP_BCOLL; }
         else if (c_eq(p, pn, "float")) {                                      // a float becomes an inline-block (columns side by side, roughly like Chrome)
             if (c_starts(v, vn, "left") || c_starts(v, vn, "right")) { r->display = 3; r->set |= CP_DISPLAY; } }
@@ -381,7 +396,7 @@ static void c_decls(const char *d, u32 n, struct crule *r, u32 parent_px) {
         else if (c_eq(p, pn, "border-style")) { if (c_starts(v, vn, "none") || c_starts(v, vn, "hidden")) for (u32 s = 0; s < 4; s++) { r->box[8 + s] = 0; r->set |= CP_BOX(8 + s); } }
         else if (c_eq(p, pn, "width")) { if (c_len(v, vn, &L)) { r->width = (short)L; r->set |= CP_WIDTH; if (L >= 0 && L <= 1) tiny = 1; } }
         else if (c_eq(p, pn, "max-width")) { if (c_len(v, vn, &L)) { r->maxw = (short)L; r->set |= CP_MAXW; } }
-        else if (c_eq(p, pn, "height") || c_eq(p, pn, "min-height")) { if (c_len(v, vn, &L)) { if (L >= 0 && L <= 1) tiny = 1; if (L >= 20000) L = LEN_AUTO; r->minh = (short)L; r->set |= CP_MINH; } }
+        else if (c_eq(p, pn, "height") || c_eq(p, pn, "min-height")) { if (c_len(v, vn, &L)) { if (L >= 0 && L <= 1) tiny = 1; if (L == 0 && p[0] == 'h') zeroh = 1; if (L >= 20000) L = LEN_AUTO; r->minh = (short)L; r->set |= CP_MINH; } }
         else if (c_eq(p, pn, "box-sizing")) { r->boxs = c_starts(v, vn, "border-box") ? 1 : 0; r->set |= CP_BOXS; }
         else if (c_eq(p, pn, "list-style") || c_eq(p, pn, "list-style-type")) { r->listnone = 0; for (u32 k = 0; k + 4 <= vn; k++) if (c_starts(v + k, vn - k, "none")) r->listnone = 1; r->set |= CP_LIST; }
         else if (c_eq(p, pn, "white-space")) { r->ws = c_starts(v, vn, "nowrap") ? 1 : c_starts(v, vn, "pre-line") ? 0 : c_starts(v, vn, "pre") || c_starts(v, vn, "break-spaces") ? 2 : 0; r->set |= CP_WS; }
@@ -393,7 +408,7 @@ static void c_decls(const char *d, u32 n, struct crule *r, u32 parent_px) {
         if (imp) r->imp |= got;
         if (i < n) i++;
     }
-    if (posabs && (tiny || clipped || offscreen)) { r->display = 0; r->set |= CP_DISPLAY; }
+    if ((posabs && (tiny || clipped || offscreen)) || (ovhidden && zeroh)) { r->display = 0; r->set |= CP_DISPLAY; }
 }
 // one cascaded property from rule s into d
 static void c_take(struct crule *d, const struct crule *s, u32 b) {
@@ -403,6 +418,7 @@ static void c_take(struct crule *d, const struct crule *s, u32 b) {
         else if (bit == CP_AITEMS) d->aitems = s->aitems; else if (bit == CP_VALIGN) d->valign = s->valign; else if (bit == CP_GAP) d->gap = s->gap;
         else if (bit == CP_RGAP) d->rgap = s->rgap; else if (bit == CP_GROW) d->grow = s->grow; else if (bit == CP_SHRINK) d->shrink = s->shrink;
         else if (bit == CP_BASIS) d->basis = s->basis; else if (bit == CP_GSPAN) d->gspan = s->gspan; else if (bit == CP_BCOLL) d->bcoll = s->bcoll;
+        else if (bit == CP_RADIUS) d->radius = s->radius; else if (bit == CP_LH) d->lh = s->lh; else if (bit == CP_TT) d->tt = s->tt;
         else if (bit == CP_GRIDT) { d->gt_n = s->gt_n; d->gt_min = s->gt_min; for (u32 q = 0; q < GT_MAX; q++) { d->gt_t[q] = s->gt_t[q]; d->gt_v[q] = s->gt_v[q]; } }
         return;
     }
@@ -550,6 +566,7 @@ struct gpiece { u32 a, b; int top, asc; };                                      
 #define GPIECE_MAX 512
 static struct gpiece gpc[GPIECE_MAX]; static u32 gpn, g_piece_lo;
 static u32 g_colspan; static int g_cellpad = -1, g_cellspace = -1, g_tborder;   // attributes of the tag being opened
+static int g_itype;                                                             // form control being opened: 1 text box, 2 button, 3 check box, 4 radio, 5 drop-down, 6 text area
 
 static void g_line_end(void) {
     if (g_line_empty) return;
@@ -581,12 +598,22 @@ static void g_line_end(void) {
 static void g_vspace(int px) { g_line_end(); if (px > g_last_margin) { g_y += px - g_last_margin; g_last_margin = px; } }
 static u32 g_face_index(const struct gstyle *s) { const struct aaface *f = g_face(s->size, s->bold, s->mono); return (u32)(f - aa_faces); }
 static void g_add_line_metrics(int asc, int desc) { if (asc > g_line_asc) g_line_asc = asc; if (desc > g_line_desc) g_line_desc = desc; }
+static int g_lineh(const struct gstyle *st, const struct aaface *f) {          // CSS line-height (normal = the font's own)
+    if (!st->lh) return f->line;
+    int L = st->lh > 0 ? st->lh : -st->lh * st->size / 100;
+    return L < 4 ? 4 : L > 300 ? 300 : L;
+}
 static void g_word(const char *w, u32 n) {
     struct gnode *top = &gstk[gsp]; struct gstyle *st = &top->s;
     if (st->hidden || !n) return;
+    static char tw[256];
+    if (st->tt && n < sizeof tw) {                                            // text-transform
+        for (u32 i = 0; i < n; i++) { char c = w[i]; if (st->tt == 1 || (st->tt == 3 && i == 0)) { if (c >= 'a' && c <= 'z') c -= 32; } else if (st->tt == 2 && c >= 'A' && c <= 'Z') c += 32; tw[i] = c; }
+        w = tw;
+    }
     u32 fi = g_face_index(st); const struct aaface *f = &aa_faces[fi];
     u32 ww = g_text_w(f, w, n), sp = g_pend_space && !g_line_empty ? f->g[0].adv : 0;
-    int lineh = f->line, asc = f->ascent;
+    int lineh = g_lineh(st, f), asc = f->ascent + (lineh - f->line) / 2;
     if (g_meas) {
         g_x += (int)(sp + ww); if (g_x > top->mx) top->mx = g_x; if ((int)ww > top->mn) top->mn = (int)ww;
         g_add_line_metrics(asc, lineh - asc); g_pend_space = 0; g_line_empty = 0; g_last_margin = 0;
@@ -832,7 +859,7 @@ static void g_open(const char *tn, const char *idv, const char *clsv, const char
     for (u32 i = 0; clsv[i] && e->ncls < 4;) { while (clsv[i] == ' ') i++; u32 s = i; while (clsv[i] && clsv[i] != ' ') i++; if (i > s) e->hcls[e->ncls++] = g_hash(clsv + s, i - s); }
     e->s = par->s; e->s.block = 0; e->s.imgw = e->s.imgh = 0;
     e->bgitem = e->blitem = e->britem = e->bbitem = e->ibitem = GNONE; e->pb = e->bb = e->mb = e->mt = e->minh = 0; e->ibpr = e->ibmr = 0;
-    e->cmode = 0; e->atomic = 0; e->mx = e->mn = 0; e->ext = 0; e->wfix = -1; e->ml = e->mr = 0; e->ccount = 0; e->va = 0; e->gapx = e->rgap = 0;
+    e->cmode = 0; e->atomic = 0; e->mx = e->mn = 0; e->ext = 0; e->wfix = -1; e->ml = e->mr = 0; e->ccount = 0; e->va = 0; e->isbox = 0; e->gapx = e->rgap = 0;
     e->istart = e->cstart = gin; e->mlo = gmn;
     u32 ei = gm && gm_n < gm_max ? gm_n++ : GNONE; e->ei = ei;
     struct gstyle *s = &e->s;
@@ -868,7 +895,19 @@ static void g_open(const char *tn, const char *idv, const char *clsv, const char
         s->cellpad = (short)g_cellpad; s->tborder = (u8)(g_tborder > 0); s->align = 0;
         if (g_tborder > 0) { ua[8] = ua[9] = ua[10] = ua[11] = 1; ua_bcol = 0x808080; }
     }
-    else if (tag_is(tn, "script") || tag_is(tn, "style") || tag_is(tn, "head") || tag_is(tn, "noscript") || tag_is(tn, "template") || tag_is(tn, "svg") || tag_is(tn, "iframe") || tag_is(tn, "select") || tag_is(tn, "button") || tag_is(tn, "input") || tag_is(tn, "textarea") || tag_is(tn, "dialog")) s->hidden = 1;
+    else if (tag_is(tn, "fieldset")) { ua[1] = ua[3] = 2; ua[4] = 5; ua[5] = ua[7] = 12; ua[6] = 10; ua[8] = ua[9] = ua[10] = ua[11] = 2; ua_bcol = 0xc0c0c0; }
+    else if (tag_is(tn, "option")) { if (tag_is(par->tag, "select") || tag_is(par->tag, "optgroup")) { if (par->s.list_n++) s->hidden = 1; } }   // a closed drop-down shows its first choice
+    else if (tag_is(tn, "svg")) { disp = 3; s->svg = 1; }                    // icons: their space is kept (the drawing itself is not shown yet)
+    else if (tag_is(tn, "script") || tag_is(tn, "style") || tag_is(tn, "head") || tag_is(tn, "noscript") || tag_is(tn, "template") || tag_is(tn, "iframe") || tag_is(tn, "dialog") || tag_is(tn, "datalist") || tag_is(tn, "map") || tag_is(tn, "object")) s->hidden = 1;
+    if (par->s.svg) s->hidden = 1;
+    int ua_radius = 0;
+    if (g_itype) {                                                            // form controls (Chrome's look): text boxes, buttons, drop-downs, check boxes
+        disp = 3; s->size = 13; s->color = 0; s->bold = 0; s->under = 0; s->list_n = 0;
+        ua[8] = ua[9] = ua[10] = ua[11] = 1; ua_bcol = 0x767676; ua_radius = 2;
+        if (g_itype == 1 || g_itype == 6) { ua[4] = ua[6] = 1; ua[5] = ua[7] = 2; s->nowrap = g_itype == 1; s->align = 0; }
+        else if (g_itype == 2 || g_itype == 5) { ua[4] = ua[6] = 1; ua[5] = ua[7] = 6; if (g_itype == 5) ua[5] = 22; s->align = g_itype == 2; s->nowrap = 1; }
+        else { ua[0] = ua[2] = ua[1] = 3; ua[3] = 4; ua_radius = g_itype == 4 ? 20050 : 2; }
+    }
     if (disp == 10) { int cp = par->s.cellpad >= 0 ? par->s.cellpad : 1; ua[4] = ua[5] = ua[6] = ua[7] = cp; if (par->s.tborder) { ua[8] = ua[9] = ua[10] = ua[11] = 1; ua_bcol = 0x808080; } }
     // CSS: for each property the winning declaration (!important, then style="", then specificity and order; presentational attributes lowest)
     gsp++;
@@ -918,6 +957,9 @@ static void g_open(const char *tn, const char *idv, const char *clsv, const char
     if (have & CP_LIST) s->listnone = best.listnone;
     if (have & CP_WS) { s->nowrap = best.ws == 1; s->pre = best.ws == 2; }
     if (have & CP_VALIGN) e->va = best.valign;
+    if (have & CP_LH) s->lh = best.lh;
+    if (have & CP_TT) s->tt = best.tt;
+    if (s->svg && !(have & CP_WIDTH)) s->hidden = 1;                         // an icon without a size: nothing to keep room for
     if (have & CP_DISPLAY) { if (best.display == 0) s->hidden = 1; else disp = best.display; }
     int css_cell = 0;
     if (!g_is_tabletag(tn)) { if (disp == 8) disp = 1; else if (disp == 13) disp = 1; else if (disp == 9) disp = 4; else if (disp == 10) { css_cell = 1; disp = par->cmode ? 1 : 3; } }   // CSS tables made of divs: rows of cells side by side
@@ -947,6 +989,8 @@ static void g_open(const char *tn, const char *idv, const char *clsv, const char
         bd[q] = bxv[8 + q]; if (bd[q] < 0 || bd[q] >= 20000) bd[q] = 0;
     }
     u32 bcol = (have & CP_BCOL) ? best.bcolor : ua_bcol != 0xffffffff ? ua_bcol : s->color;
+    int rad = (have & CP_RADIUS) ? best.radius : ua_radius;
+    u16 renc = rad <= 0 ? 0 : rad >= 20000 ? (u16)(0x8000 | (rad - 20000 > 100 ? 100 : rad - 20000)) : (u16)(rad > 2000 ? 2000 : rad);
     int wset = (have & CP_WIDTH) && best.width != LEN_AUTO && !(g_meas && best.width >= 20000);
     int borderbox = (have & CP_BOXS) && best.boxs;
     int hp = pd[1] + pd[3] + bd[1] + bd[3];
@@ -963,7 +1007,7 @@ static void g_open(const char *tn, const char *idv, const char *clsv, const char
             if (have & CP_BG) {
                 const struct aaface *f = &aa_faces[g_face_index(s)];
                 e->ibitem = gin; g_rect(g_x, g_y, 1, f->line + pd[0] + pd[2], best.bg);
-                if (e->ibitem < gin) { gi[e->ibitem].flags = 4; gi[e->ibitem].off = (u32)(f->ascent + pd[0]); }
+                if (e->ibitem < gin) { gi[e->ibitem].flags = 4; gi[e->ibitem].off = (u32)(f->ascent + pd[0]); gi[e->ibitem].len = renc; }
             }
             e->ibx0 = g_x; e->ibline = g_line_no; e->ibpr = rp; e->ibmr = mr;
             g_x += lp;
@@ -1019,14 +1063,17 @@ static void g_open(const char *tn, const char *idv, const char *clsv, const char
     s->left = x0 + bd[3] + pd[3]; s->right = x0 + bbw - bd[1] - pd[1];
     if (s->right < s->left + 1) s->right = s->left + 1;
     e->bx = x0; e->bw = bbw; e->by = g_y; e->bcolor = bcol; e->mt = m[0] > 0 ? m[0] : 0;
-    if (have & CP_BG) {
-        s->bg = best.bg;
-        if (tag_is(tn, "body") || tag_is(tn, "html")) gpage_bg = best.bg;
-        else { e->bgitem = gin; g_rect(x0, g_y, bbw, 1, best.bg); }
+    int isroot = tag_is(tn, "body") || tag_is(tn, "html");
+    if (have & CP_BG) { s->bg = best.bg; if (isroot) gpage_bg = best.bg; }
+    if (renc && bd[0] == bd[1] && bd[1] == bd[2] && bd[2] == bd[3] && !isroot && ((have & CP_BG) || bd[0])) {   // rounded corners: one box item
+        e->isbox = 1; e->bgitem = gin; g_rect(x0, g_y, bbw, 1, (have & CP_BG) ? best.bg : 0);
+        if (e->bgitem < gin) { struct gitem *bx = &gi[e->bgitem]; bx->type = GI_BOX; bx->bg = bcol; bx->off = (u32)bd[0]; bx->len = renc; bx->flags = (have & CP_BG) ? 0 : 16; }
+    } else {
+        if ((have & CP_BG) && !isroot) { e->bgitem = gin; g_rect(x0, g_y, bbw, 1, best.bg); }
+        if (bd[0]) g_rect(x0, g_y, bbw, bd[0], bcol);
+        if (bd[3]) { e->blitem = gin; g_rect(x0, g_y, bd[3], 1, bcol); }
+        if (bd[1]) { e->britem = gin; g_rect(x0 + bbw - bd[1], g_y, bd[1], 1, bcol); }
     }
-    if (bd[0]) g_rect(x0, g_y, bbw, bd[0], bcol);
-    if (bd[3]) { e->blitem = gin; g_rect(x0, g_y, bd[3], 1, bcol); }
-    if (bd[1]) { e->britem = gin; g_rect(x0 + bbw - bd[1], g_y, bd[1], 1, bcol); }
     g_y += bd[0] + pd[0]; if (bd[0] + pd[0]) g_last_margin = 0;
     if (disp == 8) g_y += s->tspace;
     e->cy = g_y; e->pb = pd[2]; e->bb = bd[2]; e->mb = m[2] > 0 ? m[2] : 0;
@@ -1074,7 +1121,11 @@ static void g_close_top(void) {
         g_line_end();
         if (e->minh > 0 && g_y - e->cy < e->minh) g_y = e->cy + e->minh;
         if (e->pb) { g_y += e->pb; g_last_margin = 0; }
-        if (e->bb) { e->bbitem = gin; g_rect(e->bx, g_y, e->bw, e->bb, e->bcolor); g_y += e->bb; g_last_margin = 0; }
+        if (e->bb) { if (!e->isbox) { e->bbitem = gin; g_rect(e->bx, g_y, e->bw, e->bb, e->bcolor); } g_y += e->bb; g_last_margin = 0; }
+        if (!g_meas && tag_is(e->tag, "select")) {                            // the drop-down arrow
+            int ax = e->bx + e->bw - 15, ay = e->cy + (g_y - e->cy) / 2 - 2;
+            for (int q = 0; q < 4; q++) g_rect(ax + q, ay + q, 7 - 2 * q, 1, e->s.color);
+        }
         int hgt = g_y - e->by; if (hgt < 0) hgt = 0; if (hgt > 65535) hgt = 65535;
         if (e->bgitem < gin) gi[e->bgitem].h = (u16)hgt;
         if (e->blitem < gin) gi[e->blitem].h = (u16)hgt;
@@ -1143,12 +1194,12 @@ static void g_pass(const u8 *h, u32 n, int width) {
     root->pb = root->bb = root->mb = root->minh = 0; root->cmode = 0; root->atomic = 0; root->ei = GNONE; root->mx = root->mn = 0; root->ccount = 0;
     struct gstyle *s = &root->s;
     s->size = 16; s->bold = 0; s->mono = 0; s->pre = 0; s->align = 0; s->hidden = 0; s->under = 0; s->block = 1; s->color = 0x000000; s->bg = 0xffffff; s->listnone = 0; s->nowrap = 0; s->imgw = s->imgh = 0;
-    s->left = g_left0; s->right = g_right0; s->link = 0; s->list_n = 0; s->list_ol = 0; s->disp = 1; s->cellpad = -1; s->tspace = 2; s->tborder = 0;
+    s->left = g_left0; s->right = g_right0; s->link = 0; s->list_n = 0; s->list_ol = 0; s->disp = 1; s->cellpad = -1; s->tspace = 2; s->tborder = 0; s->lh = 0; s->tt = 0; s->svg = 0;
     g_x = g_left0; g_y = 0; g_line_start = g_x; g_line_asc = g_line_desc = 0; g_pend_space = 0; g_line_empty = 1; g_line_item = 0; g_last_margin = 0; g_line_no = 0;
     w_nlinks = 0; w_nimg = 0; web_title[0] = 0;
     u32 i = 0, in_title = 0;
     static char tn[12], idv[40], clsv[160], stylev[400], href[WEB_HREF], alt[60], isrc[WEB_HREF], dsrc[WEB_HREF], wv[12], hv[12];
-    static char bgv[24], alv[12], valv[12], colv[24], spanv[6], cpv[6], csv[6], bdv[6], pres[200];
+    static char bgv[24], alv[12], valv[12], colv[24], spanv[6], cpv[6], csv[6], bdv[6], pres[240], typev[16], valuev[80], phv[80], szv[6];
     static char tbuf[512]; u32 tl = 0;
     #define FLUSH_TEXT() do { if (tl) { if (in_title) { u32 q = 0; while (web_title[q]) q++; for (u32 z = 0; z < tl && q + 1 < sizeof web_title; z++) { web_title[q++] = tbuf[z]; web_title[q] = 0; } } else g_text(tbuf, tl); tl = 0; } } while (0)
     while (i < n) {
@@ -1163,7 +1214,7 @@ static void g_pass(const u8 *h, u32 n, int width) {
             if (h[i + 1] == '!' || h[i + 1] == '?') { FLUSH_TEXT(); while (i < n && h[i] != '>') i++; i++; continue; }   // <!DOCTYPE>, <![CDATA[ ...
             FLUSH_TEXT();
             idv[0] = clsv[0] = stylev[0] = href[0] = alt[0] = isrc[0] = dsrc[0] = wv[0] = hv[0] = 0; u32 hidden_attr = 0, nowrap_attr = 0;
-            bgv[0] = alv[0] = valv[0] = colv[0] = spanv[0] = cpv[0] = csv[0] = bdv[0] = 0;
+            bgv[0] = alv[0] = valv[0] = colv[0] = spanv[0] = cpv[0] = csv[0] = bdv[0] = typev[0] = valuev[0] = phv[0] = szv[0] = 0;
             while (j < n && h[j] != '>') {
                 while (j < n && (c_ws((char)h[j]) || h[j] == '/')) j++;
                 if (j >= n || h[j] == '>') break;
@@ -1178,6 +1229,8 @@ static void g_pass(const u8 *h, u32 n, int width) {
                 else if (tag_is(an, "bgcolor")) { dst = bgv; dmax = sizeof bgv; } else if (tag_is(an, "align")) { dst = alv; dmax = sizeof alv; } else if (tag_is(an, "valign")) { dst = valv; dmax = sizeof valv; }
                 else if (tag_is(an, "color")) { dst = colv; dmax = sizeof colv; } else if (tag_is(an, "colspan")) { dst = spanv; dmax = sizeof spanv; }
                 else if (tag_is(an, "cellpadding")) { dst = cpv; dmax = sizeof cpv; } else if (tag_is(an, "cellspacing")) { dst = csv; dmax = sizeof csv; } else if (tag_is(an, "border")) { dst = bdv; dmax = sizeof bdv; }
+                else if (tag_is(an, "type")) { dst = typev; dmax = sizeof typev; } else if (tag_is(an, "value")) { dst = valuev; dmax = sizeof valuev; }
+                else if (tag_is(an, "placeholder")) { dst = phv; dmax = sizeof phv; } else if (tag_is(an, "size")) { dst = szv; dmax = sizeof szv; }
                 else if (tag_is(an, "hidden")) hidden_attr = 1;
                 else if (tag_is(an, "nowrap")) nowrap_attr = 1;
                 while (j < n && c_ws((char)h[j])) j++;
@@ -1196,6 +1249,11 @@ static void g_pass(const u8 *h, u32 n, int width) {
             i = j < n ? j + 1 : n;
             if (hidden_attr) { const char *dn = "display:none!important"; u32 q = 0; while (dn[q]) { stylev[q] = dn[q]; q++; } stylev[q] = 0; }
             if (tag_is(tn, "script") || tag_is(tn, "style") || tag_is(tn, "textarea")) {        // raw text up to the end tag: skipped here (style sheets were read before)
+                if (!closing && tn[0] == 't') {                               // a text area: an empty box (with its hint text)
+                    g_itype = 6; int sp0 = gsp;
+                    g_open(tn, idv, clsv, stylev, "width:180px;height:34px;background-color:#fff;", href); g_itype = 0;
+                    if (gsp > sp0) { if (phv[0]) { gstk[gsp].s.color = 0x757575; g_text(phv, g_slen(phv)); } g_close_top(); }
+                }
                 if (!closing) { while (i + 2 < n) { if (h[i] == '<' && h[i + 1] == '/') { u32 q = 0; while (tn[q] && i + 2 + q < n && (h[i + 2 + q] | 0x20) == (u8)tn[q]) q++; if (!tn[q]) break; } i++; } while (i < n && h[i] != '>') i++; i++; }
                 continue;
             }
@@ -1213,6 +1271,16 @@ static void g_pass(const u8 *h, u32 n, int width) {
             if (valv[0]) { PADD("vertical-align:"); PADD(valv); PADD(";"); }
             if (colv[0] && tag_is(tn, "font")) { PADD("color:"); PADD(colv); PADD(";"); }
             if (nowrap_attr) PADD("white-space:nowrap;");
+            int itype = 0;                                                    // form controls: Chrome's default sizes and colours
+            if (tag_is(tn, "input")) {
+                u32 tlen = g_slen(typev);
+                if (c_eq(typev, tlen, "hidden")) continue;
+                itype = c_eq(typev, tlen, "submit") || c_eq(typev, tlen, "button") || c_eq(typev, tlen, "reset") || c_eq(typev, tlen, "image") || c_eq(typev, tlen, "file") ? 2 : c_eq(typev, tlen, "checkbox") ? 3 : c_eq(typev, tlen, "radio") ? 4 : 1;
+            } else if (tag_is(tn, "button")) itype = 2; else if (tag_is(tn, "select")) itype = 5;
+            if (itype == 1) { u32 sz = 0; for (u32 q = 0; szv[q] >= '0' && szv[q] <= '9'; q++) sz = sz * 10 + (u32)(szv[q] - '0'); char wb[12]; u32 w = sz ? (sz > 100 ? 100 : sz) * 7 : 146, wl = 0; char d[6]; u32 dc = 0; do { d[dc++] = (char)('0' + w % 10); w /= 10; } while (w); while (dc) wb[wl++] = d[--dc]; wb[wl] = 0;
+                              PADD("width:"); PADD(wb); PADD("px;height:16px;background-color:#fff;"); }
+            else if (itype == 2 || itype == 5) PADD("background-color:#efefef;");
+            else if (itype == 3 || itype == 4) PADD("width:13px;height:13px;background-color:#fff;");
             pres[pn] = 0;
             #undef PADD
             #undef PLEN
@@ -1221,6 +1289,21 @@ static void g_pass(const u8 *h, u32 n, int width) {
             g_cellspace = -1; if (csv[0]) { g_cellspace = 0; for (u32 q = 0; csv[q] >= '0' && csv[q] <= '9'; q++) g_cellspace = g_cellspace * 10 + (csv[q] - '0'); if (g_cellspace > 50) g_cellspace = 50; }
             g_tborder = 0; if (bdv[0]) { for (u32 q = 0; bdv[q] >= '0' && bdv[q] <= '9'; q++) g_tborder = g_tborder * 10 + (bdv[q] - '0'); if (!(bdv[0] >= '0' && bdv[0] <= '9')) g_tborder = 1; }
             g_autoclose(tn);
+            if (tag_is(tn, "input")) {
+                g_itype = itype; int sp0 = gsp;
+                g_open(tn, idv, clsv, stylev, pres, href); g_itype = 0;
+                if (gsp > sp0) {
+                    u32 tlen = g_slen(typev);
+                    if (itype == 1) { if (valuev[0]) g_text(valuev, g_slen(valuev)); else if (phv[0]) { gstk[gsp].s.color = 0x757575; g_text(phv, g_slen(phv)); } else g_word(" ", 1); }
+                    else if (itype == 2) {
+                        const char *lb = valuev[0] ? valuev : c_eq(typev, tlen, "file") ? "Choose File" : c_eq(typev, tlen, "reset") ? "Reset" : c_eq(typev, tlen, "button") ? " " : c_eq(typev, tlen, "image") && alt[0] ? alt : "Submit";
+                        g_text(lb, g_slen(lb)); if (lb[0] == ' ') g_word(" ", 1);
+                    }
+                    g_close_top();
+                }
+                continue;
+            }
+            g_itype = itype;                                                  // <button> / <select>: their content is laid out inside the box
             if (tag_is(tn, "a")) {
                 g_open(tn, idv, clsv, stylev, pres, href);
                 if (href[0] && w_nlinks < WEB_MAXLINKS && !gstk[gsp].s.hidden) { web_href_store(href); w_nlinks++; gstk[gsp].s.link = w_nlinks; }
@@ -1246,7 +1329,7 @@ static void g_pass(const u8 *h, u32 n, int width) {
                 continue;
             }
             int sp0 = gsp;
-            g_open(tn, idv, clsv, stylev, pres, href);
+            g_open(tn, idv, clsv, stylev, pres, href); g_itype = 0;
             if (g_is_void(tn) && gsp > sp0) g_close_top();
             continue;
         }
@@ -1348,6 +1431,36 @@ static void g_fill(int x, int y, int w, int h, u32 c, int clip_y0, int clip_y1) 
         else for (int xx = 0; xx < w; xx++) px((u32)(x + xx), (u32)(y + yy), c);
     }
 }
+// rounded corners: how far row yy of a box h rows tall is cut in at each side, for radius r
+static u32 g_isqrt(u32 v) { u32 r = 0, b = 1u << 30; while (b > v) b >>= 2; while (b) { if (v >= r + b) { v -= r + b; r = (r >> 1) + b; } else r >>= 1; b >>= 2; } return r; }
+static int g_inset(int r, int yy, int h) {
+    if (r <= 0) return 0;
+    int t = yy < r ? yy : h - 1 - yy; if (t >= r || t < 0) return 0;
+    int d2 = 2 * r - 1 - 2 * t; return r - (int)g_isqrt((u32)(4 * r * r - d2 * d2)) / 2;
+}
+static int g_radius(u16 enc, int w, int h) {
+    int m = w < h ? w : h, r = (enc & 0x8000) ? (enc & 0x7fff) * m / 100 : enc;
+    return r > m / 2 ? m / 2 : r;
+}
+static void g_fill_round(int x, int y, int w, int h, int r, u32 c, int y0, int y1) {
+    if (r <= 0) { g_fill(x, y, w, h, c, y0, y1); return; }
+    for (int yy = 0; yy < h; yy++) { if (y + yy < y0 || y + yy >= y1) continue; int in = g_inset(r, yy, h); g_fill(x + in, y + yy, w - 2 * in, 1, c, y0, y1); }
+}
+// a box with rounded corners: background inside, border ring around it
+static void g_draw_box(const struct gitem *it, int sy, int y0, int y1) {
+    int w = it->w, h = it->h, bw = (int)it->off, r = g_radius(it->len, w, h);
+    if (!(it->flags & 16)) g_fill_round(it->x, sy, w, h, r, it->color, y0, y1);
+    if (bw <= 0) return;
+    int ri = r - bw; if (ri < 0) ri = 0;
+    for (int yy = 0; yy < h; yy++) {
+        int ry = sy + yy; if (ry < y0 || ry >= y1) continue;
+        int io = g_inset(r, yy, h);
+        if (yy < bw || yy >= h - bw) { g_fill(it->x + io, ry, w - 2 * io, 1, it->bg, y0, y1); continue; }
+        int ii = bw + g_inset(ri, yy - bw, h - 2 * bw);
+        g_fill(it->x + io, ry, ii - io, 1, it->bg, y0, y1);
+        g_fill(it->x + w - ii, ry, ii - io, 1, it->bg, y0, y1);
+    }
+}
 // Paint the page, scrolled to `top` pixels, into screen rows y0..y1. sel = the link picked with Left/Right (highlighted).
 static void g_draw(int top, int y0, int y1, u32 sel) {
     g_fill(0, y0, (int)con_fb.w, y1 - y0, gpage_bg, y0, y1);
@@ -1355,7 +1468,8 @@ static void g_draw(int top, int y0, int y1, u32 sel) {
         struct gitem *it = &gi[i];
         int sy = it->y - top + y0;
         if (sy >= y1 || sy + it->h <= y0) continue;
-        if (it->type == GI_RECT) { g_fill(it->x, sy, it->w, it->h, it->color, y0, y1); continue; }
+        if (it->type == GI_RECT) { if (it->len) g_fill_round(it->x, sy, it->w, it->h, g_radius(it->len, it->w, it->h), it->color, y0, y1); else g_fill(it->x, sy, it->w, it->h, it->color, y0, y1); continue; }
+        if (it->type == GI_BOX) { g_draw_box(it, sy, y0, y1); continue; }
         if (it->type == GI_IMG) {
             u32 id = it->off; if (id >= WEB_MAXIMG || !web_img_pix[id]) continue;
             for (u32 yy = 0; yy < it->h; yy++) {
