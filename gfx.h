@@ -39,8 +39,8 @@ struct gnode { char tag[12]; u32 htag, hid, hcls[4]; u32 ncls; struct gstyle s;
                u32 bgitem, blitem, britem, bbitem, bcolor; int bx, bw, by, cy, pb, bb, mb, mt, minh;     // block box
                u32 ibitem, ibline; int ibx0, ibpr, ibmr;                                     // inline box with a background / padding
                u32 ei, istart, cstart; int mx, mn, ext, wfix, ml, mr;                        // pass-1 element number, its display items, measuring
-               u8 cmode, atomic, aitems, va, isbox; int rowtop, rowbot, cursor, gapx, rgap, ccount; u32 mlo;   // cmode: 1 flex row, 2 column, 3 grid, 4 table row
-               int sv_ls, sv_asc, sv_desc, sv_empty, sv_y, sv_base; u32 sv_item, sv_plo; };           // inline-block: the line it interrupted
+               u8 cmode, atomic, aitems, va, isbox, isfloat; int fowner, rowtop, rowbot, cursor, gapx, rgap, ccount; u32 mlo;   // cmode: 1 flex row, 2 column, 3 grid, 4 table row
+               int sv_ls, sv_asc, sv_desc, sv_empty, sv_y, sv_base, sv_lx, sv_rx; u32 sv_item, sv_plo; };           // inline-block: the line it interrupted
 #define GSTACK 256
 static struct gnode gstk[GSTACK]; static int gsp;
 static u32 g_hash(const char *s, u32 n) { u32 h = 2166136261u; for (u32 i = 0; i < n; i++) { u8 c = (u8)s[i]; if (c >= 'A' && c <= 'Z') c += 32; h = (h ^ c) * 16777619u; } return h ? h : 1; }
@@ -80,7 +80,9 @@ struct ccomp { u32 tag, id, cls[3]; u8 ncls; };
 #define CP_LH (1ull << 41)
 #define CP_TT (1ull << 42)
 #define CP_MASK (1ull << 43)
-#define CP_NBITS 44
+#define CP_FLOAT (1ull << 44)
+#define CP_CLEAR (1ull << 45)
+#define CP_NBITS 46
 #define BG_NONE 0x1000000u                          // colour values: transparent
 #define BG_CUR 0x2000000u                           //                currentColor (the text colour)
 #define LEN_AUTO (-32768)                           // lengths are pixels; 20000+N means N percent; LEN_AUTO = auto
@@ -89,7 +91,7 @@ struct ccomp { u32 tag, id, cls[3]; u8 ncls; };
 struct crule { struct ccomp c[4]; u8 nc; u64 set, imp; u16 spec; u32 order; u32 color, bg, bcolor; short box[12], width, maxw, minh;
                u8 size, sizerel, bold, align, display, deco, mono, listnone, boxs, ws;
                u8 fdir, wrap, just, aitems, valign, bcoll, gspan, gt_n; short gap, rgap, grow, shrink, basis, gt_min; u8 gt_t[GT_MAX]; short gt_v[GT_MAX];
-               short radius, lh; u8 tt, mask; };                          // radius: px or 20000+percent; lh: 0 normal, >0 px, <0 -(ratio x100); tt: 1 upper 2 lower 3 capitalize
+               short radius, lh; u8 tt, mask, flt, clr; };          // flt: 1 left 2 right; clr: 1 left 2 right 3 both                          // radius: px or 20000+percent; lh: 0 normal, >0 px, <0 -(ratio x100); tt: 1 upper 2 lower 3 capitalize
 static struct crule *crules; static u32 ncrules, crules_max;
 static u32 css_order;
 static int g_screen_w = 1366;                       // for @media (min-width / max-width)
@@ -380,8 +382,8 @@ static void c_decls(const char *d, u32 n, struct crule *r, u32 parent_px) {
         else if (c_eq(p, pn, "overflow") || c_eq(p, pn, "overflow-y")) { if (c_starts(v, vn, "hidden") || c_starts(v, vn, "clip")) ovhidden = 1; }
         else if (c_eq(p, pn, "max-height")) { if (c_len(v, vn, &L) && L == 0) zeroh = 1; }
         else if (c_eq(p, pn, "border-collapse")) { r->bcoll = c_starts(v, vn, "collapse") ? 1 : 0; r->set |= CP_BCOLL; }
-        else if (c_eq(p, pn, "float")) {                                      // a float becomes an inline-block (columns side by side, roughly like Chrome)
-            if (c_starts(v, vn, "left") || c_starts(v, vn, "right")) { r->display = 3; r->set |= CP_DISPLAY; } }
+        else if (c_eq(p, pn, "float")) { r->flt = c_starts(v, vn, "left") || c_starts(v, vn, "inline-start") ? 1 : c_starts(v, vn, "right") || c_starts(v, vn, "inline-end") ? 2 : 0; r->set |= CP_FLOAT; }
+        else if (c_eq(p, pn, "clear")) { r->clr = c_starts(v, vn, "left") ? 1 : c_starts(v, vn, "right") ? 2 : c_starts(v, vn, "both") ? 3 : 0; r->set |= CP_CLEAR; }
         else if (c_eq(p, pn, "text-decoration") || c_eq(p, pn, "text-decoration-line")) { r->deco = c_starts(v, vn, "underline") ? 1 : 0; r->set |= CP_DECO; }
         else if (c_eq(p, pn, "visibility")) { if (c_starts(v, vn, "hidden")) { r->display = 0; r->set |= CP_DISPLAY; } }
         else if (c_eq(p, pn, "margin")) c_sides(v, vn, r, 0);
@@ -429,7 +431,7 @@ static void c_take(struct crule *d, const struct crule *s, u32 b) {
         else if (bit == CP_AITEMS) d->aitems = s->aitems; else if (bit == CP_VALIGN) d->valign = s->valign; else if (bit == CP_GAP) d->gap = s->gap;
         else if (bit == CP_RGAP) d->rgap = s->rgap; else if (bit == CP_GROW) d->grow = s->grow; else if (bit == CP_SHRINK) d->shrink = s->shrink;
         else if (bit == CP_BASIS) d->basis = s->basis; else if (bit == CP_GSPAN) d->gspan = s->gspan; else if (bit == CP_BCOLL) d->bcoll = s->bcoll;
-        else if (bit == CP_MASK) d->mask = s->mask;
+        else if (bit == CP_MASK) d->mask = s->mask; else if (bit == CP_FLOAT) d->flt = s->flt; else if (bit == CP_CLEAR) d->clr = s->clr;
         else if (bit == CP_RADIUS) d->radius = s->radius; else if (bit == CP_LH) d->lh = s->lh; else if (bit == CP_TT) d->tt = s->tt;
         else if (bit == CP_GRIDT) { d->gt_n = s->gt_n; d->gt_min = s->gt_min; for (u32 q = 0; q < GT_MAX; q++) { d->gt_t[q] = s->gt_t[q]; d->gt_v[q] = s->gt_v[q]; } }
         return;
@@ -577,6 +579,26 @@ static struct gmem gmem[GMEM_MAX]; static u32 gmn;
 struct gpiece { u32 a, b; int top, asc; };                                      // an inline-block in the current line (items a..b)
 #define GPIECE_MAX 512
 static struct gpiece gpc[GPIECE_MAX]; static u32 gpn, g_piece_lo;
+struct gfloat { int x0, x1, top, bot, owner; u8 side; };                        // a float: lines and boxes beside it make room
+#define GFLOAT_MAX 64
+static struct gfloat gfl[GFLOAT_MAX]; static u32 gfn;
+static int g_lx, g_rx;                                                          // the current line's room (between floats)
+static void g_avail(int y, int *l, int *r) {
+    for (u32 i = 0; i < gfn; i++) {
+        struct gfloat *f = &gfl[i];
+        if (y < f->top || y >= f->bot) continue;
+        if (f->side == 1) { if (f->x1 > *l && f->x0 < *r) *l = f->x1; }
+        else if (f->x0 < *r && f->x1 > *l) *r = f->x0;
+    }
+}
+static void g_line_begin(void) {                                                // a new line starts at g_y: where it may go
+    struct gstyle *st = &gstk[gsp].s;
+    g_lx = st->left; g_rx = st->right;
+    if (gfn) g_avail(g_y, &g_lx, &g_rx);
+    if (g_rx < g_lx + 1) g_rx = g_lx + 1;
+    g_x = g_lx; g_line_start = g_lx;
+}
+static int g_float_below(int y) { int nb = G_HUGE; for (u32 i = 0; i < gfn; i++) if (y >= gfl[i].top && y < gfl[i].bot && gfl[i].bot < nb) nb = gfl[i].bot; return nb; }
 static u32 g_colspan; static int g_cellpad = -1, g_cellspace = -1, g_tborder;   // attributes of the tag being opened
 static int g_itype;                                                             // form control being opened: 1 text box, 2 button, 3 check box, 4 radio, 5 drop-down, 6 text area
 
@@ -587,7 +609,7 @@ static void g_line_end(void) {
     // vertical: text sits on the common baseline; pictures and inline-blocks sit on it too
     int shift = 0;
     if (st->align && gin > g_line_item) {
-        int used = g_x - g_line_start, avail = st->right - g_line_start;
+        int used = g_x - g_line_start, avail = g_rx - g_line_start;
         shift = st->align == 1 ? (avail - used) / 2 : avail - used;
         if (shift < 0) shift = 0;
     }
@@ -604,7 +626,7 @@ static void g_line_end(void) {
     g_last_base = g_y + g_line_asc;
     g_y += lh; g_line_no++;
     g_line_empty = 1; g_line_asc = 0; g_line_desc = 0; g_pend_space = 0;
-    g_x = st->left; g_line_start = g_x; g_line_item = gin;
+    g_line_item = gin; g_line_begin();
     g_last_margin = 0;
 }
 static void g_vspace(int px) { g_line_end(); if (px > g_last_margin) { g_y += px - g_last_margin; g_last_margin = px; } }
@@ -632,7 +654,10 @@ static void g_word(const char *w, u32 n) {
         if (top->cmode && top->ei != GNONE) gm[top->ei].hastext = 1;
         return;
     }
-    if (!g_line_empty && !st->nowrap && g_x + (int)sp + (int)ww > st->right) { g_line_end(); sp = 0; }
+    if (!g_line_empty && !st->nowrap && g_x + (int)sp + (int)ww > g_rx) { g_line_end(); sp = 0; }
+    for (int t = 0; t < 8 && g_line_empty && gfn && g_x + (int)ww > g_rx && (g_lx > st->left || g_rx < st->right); t++) {   // no room beside a float: go below it
+        int nb = g_float_below(g_y); if (nb == G_HUGE) break; g_y = nb; g_line_begin();
+    }
     if (gtn + n + 2 > gtmax || gin + 2 > gimax) return;
     struct gitem *prev = gin > g_line_item ? &gi[gin - 1] : 0;
     g_add_line_metrics(asc, lineh - asc);
@@ -664,7 +689,8 @@ static void g_image(u32 id) {
     if (!w || !h) return;
     if (g_meas) { g_x += (int)w + 4; if (g_x > top->mx) top->mx = g_x; if ((int)w > top->mn) top->mn = (int)w; g_add_line_metrics((int)h, 0); g_line_empty = 0; g_pend_space = 0; g_last_margin = 0; return; }
     if ((int)w > st->right - st->left) { h = h * (u32)(st->right - st->left) / w; w = (u32)(st->right - st->left); }
-    if (!g_line_empty && g_x + (int)w > st->right) g_line_end();
+    if (!g_line_empty && g_x + (int)w > g_rx) g_line_end();
+    for (int t = 0; t < 8 && g_line_empty && gfn && g_x + (int)w > g_rx && (g_lx > st->left || g_rx < st->right); t++) { int nb = g_float_below(g_y); if (nb == G_HUGE) break; g_y = nb; g_line_begin(); }
     struct gitem *it = &gi[gin++];
     it->type = GI_IMG; it->x = g_x; it->y = g_y; it->w = (u16)w; it->h = (u16)h; it->off = id; it->link = (u8)st->link; it->flags = 0;
     g_add_line_metrics((int)h, 0);
@@ -871,7 +897,7 @@ static void g_open(const char *tn, const char *idv, const char *clsv, const char
     for (u32 i = 0; clsv[i] && e->ncls < 4;) { while (clsv[i] == ' ') i++; u32 s = i; while (clsv[i] && clsv[i] != ' ') i++; if (i > s) e->hcls[e->ncls++] = g_hash(clsv + s, i - s); }
     e->s = par->s; e->s.block = 0; e->s.imgw = e->s.imgh = 0;
     e->bgitem = e->blitem = e->britem = e->bbitem = e->ibitem = GNONE; e->pb = e->bb = e->mb = e->mt = e->minh = 0; e->ibpr = e->ibmr = 0;
-    e->cmode = 0; e->atomic = 0; e->mx = e->mn = 0; e->ext = 0; e->wfix = -1; e->ml = e->mr = 0; e->ccount = 0; e->va = 0; e->isbox = 0; e->gapx = e->rgap = 0;
+    e->cmode = 0; e->atomic = 0; e->mx = e->mn = 0; e->ext = 0; e->wfix = -1; e->ml = e->mr = 0; e->ccount = 0; e->va = 0; e->isbox = 0; e->isfloat = 0; e->gapx = e->rgap = 0;
     e->istart = e->cstart = gin; e->mlo = gmn;
     u32 ei = gm && gm_n < gm_max ? gm_n++ : GNONE; e->ei = ei;
     struct gstyle *s = &e->s;
@@ -980,6 +1006,10 @@ static void g_open(const char *tn, const char *idv, const char *clsv, const char
     else if (disp == 10 && par->cmode != 4) disp = 1;                         // a cell outside a row
     if (!s->hidden && par->cmode) { if (disp == 2 || disp == 3 || disp == 11) disp = 1; else if (disp == 5) disp = 4; else if (disp == 7) disp = 6; }   // flex / grid items are blocks
     if (disp == 8) { int bc = (have & CP_BCOLL) && best.bcoll; s->tspace = (short)(g_cellspace >= 0 ? g_cellspace : bc ? 0 : 2); }
+    int flt = (have & CP_FLOAT) && best.flt && !par->cmode && disp != 9 && disp != 10 ? best.flt : 0;
+    if (flt && g_meas) { disp = disp == 4 ? 5 : disp == 6 ? 7 : 3; flt = 0; }   // measuring: a float is sized like an inline-block
+    else if (flt && (disp == 2 || disp == 3 || disp == 11)) disp = 1;        // a float is a block
+    else if (flt && (disp == 5 || disp == 7)) disp--;
     int atomic = disp == 3 || disp == 5 || disp == 7;
     s->disp = (u8)disp; s->block = (u8)(disp != 2);
     // the element tree (pass 1)
@@ -1036,15 +1066,33 @@ static void g_open(const char *tn, const char *idv, const char *clsv, const char
     struct gmeas *pl = !g_meas && ei != GNONE && gm[ei].planned ? &gm[ei] : 0;
     int prow = par->cmode == 1 || par->cmode == 3 || par->cmode == 4;
     int x0, bbw;
-    if (atomic) {                                                             // inline-block: a box that sits in the line like a big character
+    if (flt) {                                                                // float: to the left / right edge, beside earlier floats; the text flows around it
+        g_line_end();
+        int l = par->s.left, r = par->s.right;
+        for (int t = 0; ; t++) {
+            l = par->s.left; r = par->s.right; g_avail(g_y, &l, &r);
+            int room = r - l - e->ml - e->mr;
+            bbw = e->wfix >= 0 ? e->wfix : ei != GNONE ? (gm[ei].maxc < room ? gm[ei].maxc : room) : room;
+            if (mw >= 0 && bbw > mw) bbw = mw;
+            if (bbw < hp + 1) bbw = hp + 1;
+            if (bbw <= room || t >= 8 || (l == par->s.left && r == par->s.right)) break;
+            int nb = g_float_below(g_y); if (nb == G_HUGE) break; g_y = nb;
+        }
+        e->sv_ls = g_line_start; e->sv_asc = g_line_asc; e->sv_desc = g_line_desc; e->sv_empty = g_line_empty; e->sv_y = g_y; e->sv_item = g_line_item; e->sv_plo = g_piece_lo; e->sv_base = g_last_base; g_last_base = -1;
+        x0 = flt == 1 ? l + e->ml : r - e->mr - bbw;
+        g_y += m[0] > 0 ? m[0] : 0;
+        g_line_empty = 1; g_line_asc = g_line_desc = 0; g_piece_lo = gpn; g_last_margin = 0;
+        e->isfloat = (u8)flt; e->fowner = 0; for (int q = gsp - 1; q >= 0; q--) if (gstk[q].s.block) { e->fowner = q; break; }
+    } else if (atomic) {                                                      // inline-block: a box that sits in the line like a big character
         int room = par->s.right - par->s.left - e->ml - e->mr;
         bbw = e->wfix >= 0 ? e->wfix : g_meas ? G_HUGE : ei != GNONE ? (gm[ei].maxc < room ? gm[ei].maxc : room) : room;
         if (mw >= 0 && bbw > mw) bbw = mw;
         if (bbw < hp + 1) bbw = hp + 1;
         int sp = g_pend_space && !g_line_empty ? aa_faces[g_face_index(&par->s)].g[0].adv : 0;
-        if (!g_meas && !g_line_empty && g_x + sp + e->ml + bbw + e->mr > par->s.right) { g_line_end(); sp = 0; }
+        if (!g_meas && !g_line_empty && g_x + sp + e->ml + bbw + e->mr > g_rx) { g_line_end(); sp = 0; }
         g_x += sp; g_pend_space = 0;
         e->sv_ls = g_line_start; e->sv_asc = g_line_asc; e->sv_desc = g_line_desc; e->sv_empty = g_line_empty; e->sv_y = g_y; e->sv_item = g_line_item; e->sv_plo = g_piece_lo; e->sv_base = g_last_base; g_last_base = -1;
+        e->sv_lx = g_lx; e->sv_rx = g_rx;
         x0 = g_x + e->ml;
         g_line_empty = 1; g_line_asc = g_line_desc = 0; g_piece_lo = gpn; g_last_margin = 0;
         e->atomic = 1;
@@ -1057,6 +1105,10 @@ static void g_open(const char *tn, const char *idv, const char *clsv, const char
     } else {
         if (par->cmode == 2) { g_line_end(); if (par->ccount) g_y += par->rgap; g_last_margin = 0; }
         par->ccount++;
+        if ((have & CP_CLEAR) && best.clr && gfn) {                          // clear: start below the floats on that side
+            g_line_end();
+            for (u32 q = 0; q < gfn; q++) if ((best.clr & gfl[q].side) && gfl[q].bot > g_y) { g_y = gfl[q].bot; g_last_margin = 0; }
+        }
         g_vspace(m[0] > 0 ? m[0] : 0);
         if (pl) { x0 = pl->px; bbw = pl->pw; }                                // flex column item that is not stretched
         else {
@@ -1070,6 +1122,14 @@ static void g_open(const char *tn, const char *idv, const char *clsv, const char
             if (sized && (mlauto || mrauto)) {                                // margin: auto centres a box that has a width
                 int fr = pw - bbw - e->ml - e->mr; if (fr < 0) fr = 0;
                 x0 = par->s.left + (mlauto && mrauto ? fr / 2 : mlauto ? fr : e->ml);
+            }
+            if (gfn && !g_meas) {                                             // beside a float: the box gets narrower (or moves over, if it has a width)
+                int l = par->s.left, r = par->s.right; g_avail(g_y, &l, &r);
+                if (l > par->s.left || r < par->s.right) {
+                    if (!sized) { int nx = x0 < l ? l : x0, nr = x0 + bbw > r ? r : x0 + bbw; if (nr - nx > 40) { x0 = nx; bbw = nr - nx; } }
+                    else if (x0 < l && l + bbw <= r) x0 = l;
+                    else if (x0 + bbw > r && r - bbw >= l) x0 = r - bbw;
+                }
             }
         }
     }
@@ -1096,7 +1156,7 @@ static void g_open(const char *tn, const char *idv, const char *clsv, const char
     e->cy = g_y; e->pb = pd[2]; e->bb = bd[2]; e->mb = m[2] > 0 ? m[2] : 0;
     if ((have & CP_MINH) && best.minh != LEN_AUTO && best.minh > 0 && best.minh < 20000) { e->minh = best.minh; if (borderbox) e->minh -= pd[0] + pd[2] + bd[0] + bd[2]; }
     e->cstart = gin;
-    g_x = s->left; g_line_start = g_x; g_line_item = gin;
+    g_line_item = gin; g_line_begin();
     // containers: flex, grid, table rows
     int W = s->right - s->left;
     e->gapx = (have & CP_GAP) ? RES(best.gap, W) : 0; e->rgap = (have & CP_RGAP) ? RES(best.rgap, W) : 0;
@@ -1136,6 +1196,11 @@ static void g_close_top(void) {
     } else {
         if (!g_meas && (e->cmode == 1 || e->cmode == 3 || e->cmode == 4)) { g_line_end(); g_row_finish(e); if (e->rowbot > g_y) g_y = e->rowbot; g_last_margin = 0; }
         g_line_end();
+        if (gfn) {                                                            // its floats end with it: it grows to hold them (like a clearfix)
+            int bot = g_y; u32 k2 = 0;
+            for (u32 q = 0; q < gfn; q++) { if (gfl[q].owner == gsp) { if (gfl[q].bot > bot) bot = gfl[q].bot; } else gfl[k2++] = gfl[q]; }
+            if (k2 != gfn) { gfn = k2; if (bot > g_y) { g_y = bot; g_last_margin = 0; } }
+        }
         if (e->minh > 0 && g_y - e->cy < e->minh) g_y = e->cy + e->minh;
         if (e->pb) { g_y += e->pb; g_last_margin = 0; }
         if (e->bb) { if (!e->isbox && e->bcolor != BG_NONE) { e->bbitem = gin; g_rect(e->bx, g_y, e->bw, e->bb, e->bcolor); } g_y += e->bb; g_last_margin = 0; }
@@ -1163,10 +1228,14 @@ static void g_close_top(void) {
             int asc = g_last_base > e->by ? g_last_base - e->by : hgt;     // its baseline is the baseline of its last line of text
             int desc = hgt - asc; if (desc < f->line - f->ascent) desc = f->line - f->ascent;
             g_line_start = e->sv_ls; g_line_asc = e->sv_asc; g_line_desc = e->sv_desc; g_y = e->sv_y; g_line_item = e->sv_item; g_piece_lo = e->sv_plo; g_last_base = e->sv_base;
+            g_lx = e->sv_lx; g_rx = e->sv_rx;
             if (!g_meas) { for (u32 i = e->istart; i < gin; i++) gi[i].flags |= 8; if (gpn < GPIECE_MAX) { gpc[gpn].a = e->istart; gpc[gpn].b = gin; gpc[gpn].top = e->by; gpc[gpn].asc = asc; gpn++; } }
             g_add_line_metrics(asc, desc);
             g_x = e->bx + e->bw + e->mr; g_line_empty = 0; g_pend_space = 0; g_last_margin = 0;
             if (g_meas && g_x > par->mx) par->mx = g_x;
+        } else if (e->isfloat) {                                              // the float is placed: the flow goes on where it was
+            if (gfn < GFLOAT_MAX) { struct gfloat *f = &gfl[gfn++]; f->side = e->isfloat; f->x0 = e->bx - e->ml; f->x1 = e->bx + e->bw + e->mr; f->top = e->sv_y; f->bot = e->by + hgt + e->mb; f->owner = e->fowner; }
+            g_y = e->sv_y; g_line_empty = 1; g_line_asc = g_line_desc = 0; g_piece_lo = e->sv_plo; g_last_base = e->sv_base; g_last_margin = 0; g_pend_space = 0;
         } else if (prow && !g_meas && e->ei != GNONE && gm[e->ei].planned) {  // a member of its parent's row: aligned when the row is done
             if (gmn < GMEM_MAX) {
                 struct gmem *mm = &gmem[gmn++];
@@ -1183,7 +1252,7 @@ static void g_close_top(void) {
         if (!e->atomic) g_line_item = gin;
     }
     gsp--;
-    if (g_line_empty) { g_x = gstk[gsp].s.left; g_line_start = g_x; }
+    if (g_line_empty) g_line_begin();
 }
 static void g_close(const char *tn) {
     for (int k = gsp; k > 0; k--) if (tag_is(gstk[k].tag, tn)) { while (gsp >= k) g_close_top(); return; }
@@ -1204,7 +1273,7 @@ static void g_autoclose(const char *tn) {
 
 // One pass over the page. CSS must already be in crules (g_collect_css). Images use web_img_* (ids in document order).
 static void g_pass(const u8 *h, u32 n, int width) {
-    gin = 0; gtn = 0; gsp = 0; gpage_bg = 0xffffff; gmn = 0; gpn = 0; g_piece_lo = 0; gm_n = 0;
+    gin = 0; gtn = 0; gsp = 0; gpage_bg = 0xffffff; gmn = 0; gpn = 0; g_piece_lo = 0; gm_n = 0; gfn = 0; g_lx = 0; g_rx = width;
     g_left0 = 0; g_right0 = width;
     struct gnode *root = &gstk[0];
     root->tag[0] = 0; root->htag = 0; root->hid = 0; root->ncls = 0; root->bgitem = root->blitem = root->britem = root->bbitem = root->ibitem = GNONE;
