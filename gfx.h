@@ -88,11 +88,13 @@ struct ccomp { u32 tag, id, cls[3]; u8 ncls; };
 #define LEN_AUTO (-32768)                           // lengths are pixels; 20000+N means N percent; LEN_AUTO = auto
 // display: 0 none 1 block 2 inline 3 inline-block 4 flex 5 inline-flex 6 grid 7 inline-grid 8 table 9 table-row 10 table-cell 11 list-item 13 row group
 #define GT_MAX 12                                   // grid-template-columns: up to 12 tracks (type 0 px, 1 percent, 2 fr x100, 3 auto); gt_n 255 = repeat(auto-fill, minmax(gt_min, 1fr))
-struct crule { struct ccomp c[4]; u8 nc; u64 set, imp; u16 spec; u32 order; u32 color, bg, bcolor; short box[12], width, maxw, minh;
+struct cprops { u64 set, imp; u32 color, bg, bcolor; short box[12], width, maxw, minh;
                u8 size, sizerel, bold, align, display, deco, mono, listnone, boxs, ws;
                u8 fdir, wrap, just, aitems, valign, bcoll, gspan, gt_n; short gap, rgap, grow, shrink, basis, gt_min; u8 gt_t[GT_MAX]; short gt_v[GT_MAX];
-               short radius, lh; u8 tt, mask, flt, clr; };          // flt: 1 left 2 right; clr: 1 left 2 right 3 both                          // radius: px or 20000+percent; lh: 0 normal, >0 px, <0 -(ratio x100); tt: 1 upper 2 lower 3 capitalize
+               short radius, lh; u8 tt, mask, flt, clr; };          // flt: 1 left 2 right; clr: 1 left 2 right 3 both
+struct crule { struct ccomp c[4]; u8 nc; u16 spec; u32 order, p; };         // one selector; p = its declarations (shared by "a, b, c { ... }")                          // radius: px or 20000+percent; lh: 0 normal, >0 px, <0 -(ratio x100); tt: 1 upper 2 lower 3 capitalize
 static struct crule *crules; static u32 ncrules, crules_max;
+static struct cprops *cprops; static u32 ncprops, cprops_max;
 static u32 css_order;
 static int g_screen_w = 1366;                       // for @media (min-width / max-width)
 static u32 *crule_next; static u32 crule_head[4096];   // rules bucketed by their last compound's id / class / tag (0 = any element)
@@ -193,7 +195,7 @@ static u32 c_tokens(const char *v, u32 n, u32 *ts, u32 *tl, u32 max) {
     return k;
 }
 // margin / padding shorthand: 1 to 4 lengths (top right bottom left)
-static void c_sides(const char *v, u32 n, struct crule *r, u32 base) {
+static void c_sides(const char *v, u32 n, struct cprops *r, u32 base) {
     u32 ts[4], tl[4], k = c_tokens(v, n, ts, tl, 4); int val[4];
     if (!k) return;
     for (u32 i = 0; i < k; i++) if (!c_len(v + ts[i], tl[i], &val[i])) return;
@@ -201,7 +203,7 @@ static void c_sides(const char *v, u32 n, struct crule *r, u32 base) {
     for (u32 i = 0; i < 4; i++) { r->box[base + i] = (short)val[i]; r->set |= CP_BOX(base + i); }
 }
 // border shorthand "1px solid #ccc" for one side (0-3) or all (-1). No style word = no border (like Chrome).
-static void c_border(const char *v, u32 n, struct crule *r, int side) {
+static void c_border(const char *v, u32 n, struct cprops *r, int side) {
     u32 ts[6], tl[6], k = c_tokens(v, n, ts, tl, 6);
     int w = -1, none = 0, style = 0, x; u32 col = 0, hc = 0;
     for (u32 i = 0; i < k; i++) {
@@ -236,7 +238,7 @@ static int c_track(const char *t, u32 l, u8 *ty, short *val) {
     if (c_len(t, l, &x) && x != LEN_AUTO) { if (x >= 20000) { *ty = 1; *val = (short)(x - 20000); } else { *ty = 0; *val = (short)x; } return 1; }
     return 0;
 }
-static void c_grid_tracks(const char *v, u32 vn, struct crule *r) {
+static void c_grid_tracks(const char *v, u32 vn, struct cprops *r) {
     u32 ts[GT_MAX], tl[GT_MAX], k = c_tokens(v, vn, ts, tl, GT_MAX); u32 n = 0;
     if (c_eq(v, vn, "none")) { r->gt_n = 0; r->set |= CP_GRIDT; return; }
     for (u32 q = 0; q < k && n < GT_MAX; q++) {
@@ -296,7 +298,7 @@ static u32 c_expand(const char *v, u32 n, char *out, u32 max, int depth) {
     return o;
 }
 // Parse "prop: value; prop: value" into a rule's properties.
-static void c_decls(const char *d, u32 n, struct crule *r, u32 parent_px) {
+static void c_decls(const char *d, u32 n, struct cprops *r, u32 parent_px) {
     u32 i = 0;
     int posabs = 0, tiny = 0, clipped = 0, offscreen = 0;                      // "screen reader only" text is hidden like Chrome hides it
     int ovhidden = 0, zeroh = 0;                                               // overflow: hidden with no height: a collapsed menu
@@ -424,7 +426,7 @@ static void c_decls(const char *d, u32 n, struct crule *r, u32 parent_px) {
     if ((posabs && (tiny || clipped || offscreen || invisible)) || (ovhidden && zeroh)) { r->display = 0; r->set |= CP_DISPLAY; }
 }
 // one cascaded property from rule s into d
-static void c_take(struct crule *d, const struct crule *s, u32 b) {
+static void c_take(struct cprops *d, const struct cprops *s, u32 b) {
     u64 bit = 1ull << b;
     if (b >= 27) {
         if (bit == CP_FDIR) d->fdir = s->fdir; else if (bit == CP_WRAP) d->wrap = s->wrap; else if (bit == CP_JUST) d->just = s->just;
@@ -503,18 +505,19 @@ static void css_parse(const char *s, u32 n) {
         u32 sele = i; i++;
         u32 ds = i; while (i < n && s[i] != '}') i++;
         u32 de = i; if (i < n) i++;
-        // one rule per comma-separated selector
+        // one rule per comma-separated selector; the declarations are parsed once (when the first selector is usable)
+        u32 pidx = 0xffffffff, nodecl = 0;
         for (u32 a = sel; a < sele;) {
             u32 b = a; int pa = 0; while (b < sele && (s[b] != ',' || pa)) { if (s[b] == '(') pa++; else if (s[b] == ')') pa--; b++; }
             if (css_collect_vars) {                                           // pass 1: custom properties from :root / html / body / * only
                 u32 x = a, y = b; while (x < y && c_ws(s[x])) x++; while (y > x && c_ws(s[y - 1])) y--;
                 if (c_eq(s + x, y - x, ":root") || c_eq(s + x, y - x, "html") || c_eq(s + x, y - x, "body") || c_eq(s + x, y - x, "*") || c_eq(s + x, y - x, ":host")) {
-                    struct crule tmp; tmp.set = 0; tmp.imp = 0; c_decls(s + ds, de - ds, &tmp, 0);
+                    struct cprops tmp; tmp.set = 0; tmp.imp = 0; c_decls(s + ds, de - ds, &tmp, 0);
                     break;                                                    // once per rule is enough
                 }
             } else if (ncrules < crules_max) {
                 struct crule *r = &crules[ncrules];
-                r->nc = 0; r->set = 0; r->imp = 0; r->spec = 0; int ok = 1;
+                r->nc = 0; r->spec = 0; int ok = 1;
                 u32 k = a;
                 while (k < b && ok) {                                             // descendant chain: compounds separated by spaces (or > + ~, treated as "inside")
                     while (k < b && (c_ws(s[k]) || s[k] == '>' || s[k] == '+' || s[k] == '~')) k++;
@@ -524,10 +527,15 @@ static void css_parse(const char *s, u32 n) {
                     struct ccomp *c = &r->c[r->nc++];
                     r->spec += (c->id ? 100 : 0) + c->ncls * 10 + (c->tag ? 1 : 0);
                 }
-                if (ok && r->nc) {
-                    c_decls(s + ds, de - ds, r, 0);
-                    r->order = css_order++;
-                    if (r->set) ncrules++;
+                if (ok && r->nc && !nodecl) {
+                    if (pidx == 0xffffffff) {
+                        if (ncprops >= cprops_max) break;
+                        struct cprops *pp = &cprops[ncprops]; pp->set = 0; pp->imp = 0;
+                        c_decls(s + ds, de - ds, pp, 0);
+                        if (!pp->set) { nodecl = 1; a = b + 1; continue; }            // nothing we use: skip all its selectors
+                        pidx = ncprops++;
+                    }
+                    r->p = pidx; r->order = css_order++; ncrules++;
                 }
             }
             a = b + 1;
@@ -805,7 +813,7 @@ static void g_plan_col(struct gnode *e, int W, int align) {                     
         g->planned = 1; g->rowstart = 0;
     }
 }
-static void g_plan_grid(struct gnode *e, const struct crule *st, int W, int gap) {
+static void g_plan_grid(struct gnode *e, const struct cprops *st, int W, int gap) {
     u32 n = g_kids(e->ei, g_kid, 512); if (!n) return;
     int tw[GT_MAX], cols;
     if (st->gt_n == 255) { cols = (W + gap) / (st->gt_min + gap); if (cols < 1) cols = 1; if (cols > GT_MAX) cols = GT_MAX; for (int c = 0; c < cols; c++) tw[c] = (W - gap * (cols - 1)) / cols; }
@@ -950,9 +958,9 @@ static void g_open(const char *tn, const char *idv, const char *clsv, const char
     // CSS: for each property the winning declaration (!important, then style="", then specificity and order; presentational attributes lowest)
     gsp++;
     u64 have = 0; u64 rank[CP_NBITS];
-    struct crule best;
+    struct cprops best;
     if (presv[0]) {
-        struct crule pr; pr.set = 0; pr.imp = 0; u32 sl = 0; while (presv[sl]) sl++;
+        struct cprops pr; pr.set = 0; pr.imp = 0; u32 sl = 0; while (presv[sl]) sl++;
         c_decls(presv, sl, &pr, par->s.size);
         for (u64 m = pr.set; m; m &= m - 1) { u32 b = (u32)__builtin_ctzll(m); have |= 1ull << b; rank[b] = 0; c_take(&best, &pr, b); }
     }
@@ -967,17 +975,18 @@ static void g_open(const char *tn, const char *idv, const char *clsv, const char
             for (u32 r = crule_head[bk[bi]]; r != 0xffffffff; r = crule_next[r]) {
                 struct crule *cr = &crules[r];
                 if (!c_match(cr, gsp)) continue;
+                const struct cprops *cp = &cprops[cr->p];
                 u64 base = ((u64)cr->spec << 24 | cr->order) + 1;
-                for (u64 m = cr->set; m; m &= m - 1) {
+                for (u64 m = cp->set; m; m &= m - 1) {
                     u32 b = (u32)__builtin_ctzll(m); u64 bit = 1ull << b;
-                    u64 rk = base | ((cr->imp & bit) ? 1ull << 42 : 0);
+                    u64 rk = base | ((cp->imp & bit) ? 1ull << 42 : 0);
                     if ((have & bit) && rk < rank[b]) continue;
-                    have |= bit; rank[b] = rk; c_take(&best, cr, b);
+                    have |= bit; rank[b] = rk; c_take(&best, cp, b);
                 }
             }
     }
     if (stylev[0]) {
-        struct crule in; in.set = 0; in.imp = 0; u32 sl = 0; while (stylev[sl]) sl++;
+        struct cprops in; in.set = 0; in.imp = 0; u32 sl = 0; while (stylev[sl]) sl++;
         c_decls(stylev, sl, &in, par->s.size);
         for (u64 m = in.set; m; m &= m - 1) {
             u32 b = (u32)__builtin_ctzll(m); u64 bit = 1ull << b;
@@ -1447,10 +1456,11 @@ static void g_layout(const u8 *h, u32 n, int width) {
 static int web_download(const char *url_in, u8 *buf, u32 max);
 static void g_collect_css(const u8 *h, u32 n, const char *base) {
     ncrules = 0; css_order = 0; g_screen_w = (int)con_fb.w; cvar_pn = 0; gm = 0;
-    crules_max = 12000; crules = img_alloc(crules_max * sizeof(struct crule)); crule_next = img_alloc(crules_max * 4);
+    crules_max = 40000; crules = img_alloc(crules_max * sizeof(struct crule)); crule_next = img_alloc(crules_max * 4);
+    ncprops = 0; cprops_max = 24000; cprops = img_alloc(cprops_max * sizeof(struct cprops));
     cvar_hash = img_alloc(CVAR_SLOTS * 4); cvar_off = img_alloc(CVAR_SLOTS * 4); cvar_pmax = 512u * 1024; cvar_pool = img_alloc(cvar_pmax);
     if (!cvar_hash || !cvar_off || !cvar_pool) cvar_hash = 0; else for (u32 q = 0; q < CVAR_SLOTS; q++) cvar_hash[q] = 0;
-    if (!crules || !crule_next) { crules_max = 0; crule_next = 0; c_index(); return; }
+    if (!crules || !crule_next || !cprops) { crules_max = 0; crule_next = 0; c_index(); return; }
     // the sheets in page order (style blocks point into the page, linked files are downloaded); read twice: custom properties first, then rules
     const u32 cmax = 3u << 20; u8 *cssbuf = img_alloc(cmax); u32 cused = 0, links = 0;
     static const char *sh_p[32]; static u32 sh_n[32]; u32 nsh = 0;
@@ -1496,6 +1506,9 @@ static void g_collect_css(const u8 *h, u32 n, const char *base) {
     css_collect_vars = 1; for (u32 q = 0; q < nsh; q++) css_parse(sh_p[q], sh_n[q]);
     css_collect_vars = 0; for (u32 q = 0; q < nsh; q++) css_parse(sh_p[q], sh_n[q]);
     c_index();
+    { u32 kk = con_on; con_on = 0;                                           // for the log: what the page's style came to
+      puts("css: "); put_dec(nsh); puts(" sheets ("); put_dec(links); puts(" files, "); put_dec(cused / 1024); puts(" KB), "); put_dec(ncrules); puts(" rules, "); put_dec(ncprops); puts(" blocks");
+      if (ncrules >= crules_max || ncprops >= cprops_max) puts(" (FULL)"); puts(", "); put_dec(cvar_pn / 1024); puts(" KB of variables\n"); con_on = kk; }
 }
 
 // ---------------- drawing ----------------
