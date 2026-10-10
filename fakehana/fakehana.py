@@ -117,6 +117,10 @@ class Machine:
         self._map('pericfg', 0x10003000, 0x1000)      # clock gates
         self._map('pwrap', 0x1000d000, 0x1000)        # PMIC wrapper -> fake MT6391/MT6397
         self._map('msdc3', 0x11260000, 0x1000)        # SDIO controller for the Marvell 88W8897
+        self._map('i2c4', 0x11011000, 0x1000)         # I2C bus 4: the Elan touchpad (fakei2c.py)
+        self._map('apdma', 0x11000000, 0x1000)        # AP_DMA (the I2C4 channel is at +0x300)
+        from fakei2c import FakeI2C
+        self.i2c = FakeI2C(self)
         r = self.regs
         r[('pericfg', 0x18)] = 1 << 28                # PERI0 gates: only bit 28 gated (MSDC3 clock on)
         r[('msdc3', 0x00)] = 0x200099; r[('msdc3', 0x08)] = 0x810f0002; r[('msdc3', 0x30)] = 0x108000
@@ -125,7 +129,8 @@ class Machine:
         r[('gpio', 0x510)] = 0xbc0                    # din 16-31: dat0-3 high, clk low, cmd high
         r[('gpio', 0x520)] = 0xfbe4 | (1 << 6)        # din 32-47: gpio38 (chip irq) high
         r[('gpio', 0x710)] = 0x1249                   # pins 85-89 mode 1 (85 = audio data, not yet GPIO)
-        self.pmic = {0x0100: 0x2091, 0x041e: 0x0000, 0x043a: 0x00a1}   # CID; VGP3 off; VGP3 at 2.8 V
+        self.pmic = {0x0100: 0x2091, 0x041e: 0x0000, 0x043a: 0x00a1, 0x0424: 0x8000, 0x0452: 0x00e0}   # CID; VGP3 off; VGP3 at 2.8 V; VGP6 on at 3.3 V (touchpad)
+        r[('gpio', 0x570)] = 1 << 5                   # GPIO117 (touchpad IRQ, active low) idle high
         import time as _t
         g = _t.gmtime(_t.time() - 3600)                                    # MODEL: the clock chip runs an hour behind (NTP corrects it)
         self.pmic.update({0xe00a: g.tm_sec, 0xe00c: g.tm_min, 0xe00e: g.tm_hour, 0xe010: g.tm_mday, 0xe012: g.tm_wday, 0xe014: g.tm_mon, 0xe016: g.tm_year - 1968})
@@ -307,6 +312,12 @@ class Machine:
                 v = self.msdc.read(off)
                 self._mmio('R', bank, off, v)
                 return v
+            if bank == 'i2c4' or (bank == 'apdma' and 0x300 <= off < 0x380):
+                if self.regs.get(('pericfg', 0x18), 0) & ((1 << 27) if bank == 'i2c4' else (1 << 12)):
+                    self._stop('FREEZE', 'read of %s+%#x while its clock is gated (bus hang)' % (bank, off)); return 0
+                v = self.i2c.read(off) if bank == 'i2c4' else self.i2c.dma_read(off - 0x300)
+                self._mmio('R', bank, off, v)
+                return v
             if bank == 'pwrap' and off == 0xa4:              # WACS2_RDATA: fsm in bits 16-18, data in 0-15
                 v = (self.pwrap_fsm << 16) | self.pwrap_data
                 self._mmio('R', bank, off, v)
@@ -325,6 +336,12 @@ class Machine:
                 self._stop('FREEZE', 'write to msdc3+%#x while its clock is gated (bus hang)' % off)
                 return
             if bank == 'msdc3' and self.msdc.write(off, val):
+                return
+            if bank == 'i2c4' or (bank == 'apdma' and 0x300 <= off < 0x380):
+                if self.regs.get(('pericfg', 0x18), 0) & ((1 << 27) if bank == 'i2c4' else (1 << 12)):
+                    self._stop('FREEZE', 'write to %s+%#x while its clock is gated (bus hang)' % (bank, off)); return
+                if bank == 'i2c4': self.i2c.write(off, val)
+                else: self.i2c.dma_write(off - 0x300, val)
                 return
             if bank == 'pwrap' and off == 0xa0:              # WACS2_CMD: bit31 write, adr>>1 in 16-30
                 adr = ((val >> 16) & 0x7fff) << 1
