@@ -292,7 +292,7 @@ static int web_fetch(const char *url_in) {
     char url[300]; u32 k = 0; while (url_in[k] && k + 1 < sizeof url) { url[k] = url_in[k]; k++; } url[k] = 0;
     web_top = 0; web_sel = 0;
     img_bump = 0; web_img_shown = 0; for (u32 i = 0; i < WEB_MAXIMG; i++) web_img_pix[i] = 0;   // a new page: forget the old pictures
-    web_page_gfx = 0;
+    web_page_gfx = 0; gm = 0; ncrules = 0; crule_next = 0;            // the old page's layout data lived in picture memory
     for (int hops = 0; hops < 6; hops++) {
         struct url u;
         if (!url_parse(url, &u)) { errs("NET", 31, 1, "the address is not valid (it must start with http://)"); web_error_page("Bad address", "The address must start with http:// (for example http://example.com).", url); for (u32 i = 0; i < sizeof web_url - 1 && url[i]; i++) web_url[i] = url[i]; return 0; }
