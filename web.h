@@ -6,9 +6,9 @@
 
 #define WEB_MAXLINES 12000
 #define WEB_MAXLINKS 250
-#define WEB_HREF 140
-#define WEB_RAW_MAX (512u * 1024)                              // the raw page, in update_buf (the browser and `up` never run together)
-#define WEB_TEXT_MAX (384u * 1024)                             // the page as text: characters, a style per character, a link number per character
+#define WEB_HREF 512
+#define WEB_RAW_MAX (1024u * 1024)                             // the raw page, in update_buf (the browser and `up` never run together)
+#define WEB_TEXT_MAX (208u * 1024)                             // the page as text: characters, a style per character, a link number per character
 static u8 *web_raw;                                            // set up by web_init()
 static char *wt; static u8 *wsty, *wlk;
 static u32 wn, wnl, wls[WEB_MAXLINES + 2];                     // text length, number of lines, start of each line
@@ -218,9 +218,9 @@ static void web_plain(const u8 *h, u32 n) {                                     
 }
 
 // ---- addresses ----
-static char web_url[300];                                    // the page being shown
+static char web_url[1024];                                    // the page being shown
 static u32 web_secure;                                       // the page came over https (encrypted; the certificate is not checked yet)
-struct url { char host[100]; u32 port, https; char path[200]; };
+struct url { char host[100]; u32 port, https; char path[1024]; };
 static int url_parse(const char *s, struct url *u) {
     u32 i = 0;
     u->https = 0; u->port = 80;
@@ -251,7 +251,7 @@ static int url_resolve(const char *base, const char *href, char *out, u32 max) {
     if (href[0] == '/' && href[1] == '/') { href += 2; while (*href && k + 1 < max) out[k++] = *href++; out[k] = 0; return 1; }       // //host/path: same scheme
     for (u32 i = 0; b.host[i] && k + 1 < max; i++) out[k++] = b.host[i];
     if ((b.https ? b.port != 443 : b.port != 80)) { out[k++] = ':'; char t[6]; u32 v = b.port, tc = 0, d[5]; do { d[tc++] = v % 10; v /= 10; } while (v); while (tc && k + 1 < max) out[k++] = (char)('0' + d[--tc]); (void)t; }
-    char path[300]; u32 pn = 0;
+    char path[1024]; u32 pn = 0;
     if (href[0] == '/') { while (*href && pn + 1 < sizeof path) path[pn++] = *href++; }
     else {                                                                                       // relative to the directory of the base path
         u32 last = 0; for (u32 i = 0; b.path[i] && b.path[i] != '?'; i++) if (b.path[i] == '/') last = i;
@@ -260,7 +260,7 @@ static int url_resolve(const char *base, const char *href, char *out, u32 max) {
     }
     path[pn] = 0;
     // remove ./ and ../ segments
-    char norm[300]; u32 nn = 0, i = 0;
+    char norm[1024]; u32 nn = 0, i = 0;
     while (path[i] && path[i] != '?') {
         if (path[i] == '/' && path[i + 1] == '.' && path[i + 2] == '/') { i += 2; continue; }
         if (path[i] == '/' && path[i + 1] == '.' && path[i + 2] == '.' && (path[i + 3] == '/' || !path[i + 3])) { while (nn > 0 && norm[nn - 1] != '/') nn--; if (nn > 0) nn--; i += 3; if (!path[i]) norm[nn++] = '/'; continue; }
@@ -289,7 +289,7 @@ static u32 web_top, web_sel;
 static void web_status(const char *msg);
 // Fetch `url` (following up to 5 redirects) and build the text. Returns 1 if a page was shown, 0 if an error page was shown.
 static int web_fetch(const char *url_in) {
-    char url[300]; u32 k = 0; while (url_in[k] && k + 1 < sizeof url) { url[k] = url_in[k]; k++; } url[k] = 0;
+    char url[1024]; u32 k = 0; while (url_in[k] && k + 1 < sizeof url) { url[k] = url_in[k]; k++; } url[k] = 0;
     web_top = 0; web_sel = 0;
     img_bump = 0; web_img_shown = 0; for (u32 i = 0; i < WEB_MAXIMG; i++) web_img_pix[i] = 0;   // a new page: forget the old pictures
     web_page_gfx = 0; gm = 0; ncrules = 0; crule_next = 0;            // the old page's layout data lived in picture memory
@@ -323,7 +323,7 @@ static int web_fetch(const char *url_in) {
             return 0;
         }
         if ((http_status == 301 || http_status == 302 || http_status == 303 || http_status == 307 || http_status == 308) && http_location[0]) {
-            char next[300];
+            char next[1024];
             if (!url_resolve(url, http_location, next, sizeof next)) break;
             k = 0; while (next[k] && k + 1 < sizeof url) { url[k] = next[k]; k++; } url[k] = 0;
             continue;
@@ -351,7 +351,7 @@ static int web_fetch(const char *url_in) {
 // ---- pictures ----
 // Download url into buf (following redirects); the length, or <0.
 static int web_download(const char *url_in, u8 *buf, u32 max) {
-    char url[300]; u32 k = 0; while (url_in[k] && k + 1 < sizeof url) { url[k] = url_in[k]; k++; } url[k] = 0;
+    char url[1024]; u32 k = 0; while (url_in[k] && k + 1 < sizeof url) { url[k] = url_in[k]; k++; } url[k] = 0;
     for (int hops = 0; hops < 4; hops++) {
         struct url u; if (!url_parse(url, &u)) return -1;
         u32 ip; if (dns_lookup(u.host, &ip)) return -1;
@@ -360,7 +360,7 @@ static int web_download(const char *url_in, u8 *buf, u32 max) {
         http_any = 0;
         if (n < 0) return n;
         if ((http_status == 301 || http_status == 302 || http_status == 303 || http_status == 307 || http_status == 308) && http_location[0]) {
-            char next[300]; if (!url_resolve(url, http_location, next, sizeof next)) return -1;
+            char next[1024]; if (!url_resolve(url, http_location, next, sizeof next)) return -1;
             k = 0; while (next[k] && k + 1 < sizeof url) { url[k] = next[k]; k++; } url[k] = 0; continue;
         }
         return http_status == 200 ? n : -6;
@@ -379,7 +379,7 @@ static void web_load_images(const char *page_url) {
         const char *of = " of "; for (u32 z = 0; of[z]; z++) m[q++] = of[z]; v = found; dc = 0; do { d2[dc++] = (char)('0' + v % 10); v /= 10; } while (v); while (dc) m[q++] = d2[--dc]; m[q] = 0;
         web_status(m);
         int key = kb_getc(); if (key == 'q' || key == 27) break;              // q / Esc: skip the rest of the pictures
-        char url[300]; if (!url_resolve(page_url, web_img_src[i], url, sizeof url)) continue;
+        char url[1024]; if (!url_resolve(page_url, web_img_src[i], url, sizeof url)) continue;
         int n = web_download(url, buf, 3u << 20);
         if (n <= 0) { u32 kk = con_on; con_on = 0; puts("picture failed to load: "); puts(url); putc('\n'); con_on = kk; continue; }
         u32 w, h; u32 *pix = img_load(buf, (u32)n, maxw, maxh, &w, &h);
@@ -518,12 +518,12 @@ static void web_scroll_to_link(void) {
 }
 static int web_run(const char *start) {
     web_raw = update_buf; wt = (char *)(update_buf + WEB_RAW_MAX); wsty = update_buf + WEB_RAW_MAX + WEB_TEXT_MAX; wlk = wsty + WEB_TEXT_MAX;
-    gtx = wt; gtmax = WEB_TEXT_MAX;                                           // the graphical view shares the text view's memory (only one is in use)
-    gi = (struct gitem *)(void *)wsty; gimax = (2 * WEB_TEXT_MAX) / sizeof(struct gitem);
+    gtx = g_text_pool; gtmax = sizeof g_text_pool;                            // the graphical view has its own memory (big pages)
+    gi = g_items; gimax = sizeof g_items / sizeof g_items[0];
     u32 keep_on = con_on; con_on = 0;                                         // while the browser runs, print() only logs (nothing is drawn over the page)
     con_clear();
     web_hist_n = 0; web_url[0] = 0; web_msg[0] = 0; web_title[0] = 0; wnl = 0;
-    char url[300]; u32 k = 0; while (start[k] && k + 1 < sizeof url) { url[k] = start[k]; k++; } url[k] = 0;
+    char url[1024]; u32 k = 0; while (start[k] && k + 1 < sizeof url) { url[k] = start[k]; k++; } url[k] = 0;
     web_goto(url, 0);
     char numbuf[6]; u32 numn = 0;
     for (;;) {
@@ -553,7 +553,7 @@ static int web_run(const char *start) {
         else if (c == K_LEFT) { if (w_nlinks) { web_sel = web_sel <= 1 ? w_nlinks : web_sel - 1; web_scroll_to_link(); } }
         else if (c == '\n') {
             if (web_sel >= 1 && web_sel <= w_nlinks) {
-                char next[300];
+                char next[1024];
                 if (url_resolve(web_url, web_links[web_sel], next, sizeof next)) { web_goto(next, 1); continue; }
                 web_status("that link cannot be opened here"); continue;
             }
