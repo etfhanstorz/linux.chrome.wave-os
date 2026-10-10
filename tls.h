@@ -334,7 +334,7 @@ static int https_get(u32 ip, u32 port, const char *host, const char *path, u8 *d
     if (r) { tcp.state = TCP_CLOSED; tls_err_why = 1; return r == -1 ? -1 : -2; }
     r = tls_handshake(host, deadline);
     if (r) { tcp_send(4, 0, 0); tcp.state = TCP_CLOSED; return -20 - (int)tls_err_why; }
-    static u8 req[400]; u32 n = 0;
+    static u8 req[1400]; u32 n = 0;
     const char *parts[] = {"GET ", path, " HTTP/1.0\r\nHost: ", host, "\r\nUser-Agent: wave-os\r\nAccept: text/html, text/plain, */*\r\nConnection: close\r\n\r\n"};
     for (u32 k = 0; k < 5; k++) for (u32 i = 0; parts[k][i] && n < sizeof req; i++) req[n++] = (u8)parts[k][i];
     if (tls_send(23, req, n)) { tcp.state = TCP_CLOSED; tls_err_why = 1; return -21; }

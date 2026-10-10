@@ -376,7 +376,7 @@ static void tcp_retransmit_check(void) {
 // HTTP/1.0 GET into dst (max bytes). Returns the body length, or a negative error:
 // -1 no route, -2 no connection, -3 timeout, -4 bad reply, -5 too big, -6 HTTP status was not 200
 static int http_get(u32 ip, u32 port, const char *host, const char *path, u8 *dst, u32 max, u32 timeout_ms) {
-    static u8 req[300]; u32 n = 0;
+    static u8 req[1400]; u32 n = 0;
     const char *parts[] = {"GET ", path, " HTTP/1.0\r\nHost: ", host, "\r\nUser-Agent: wave-os\r\nAccept: text/html, text/plain, */*\r\nConnection: close\r\n\r\n"};
     for (u32 k = 0; k < 5; k++) for (u32 i = 0; parts[k][i] && n < sizeof req; i++) req[n++] = parts[k][i];
     tcp.dst = dst; tcp.dstmax = max;
