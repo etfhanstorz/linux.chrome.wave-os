@@ -39,8 +39,10 @@ entry:
     // address (pointer tables, switch tables, static pointers) is listed in .rela.dyn as
     // R_AARCH64_RELATIVE: *(base + offset) = base + addend.
     adr     x0, _start                  // runtime base
-    adr     x1, __rela_start
-    adr     x2, __rela_end
+    adrp    x1, __rela_start            // adrp: the table is more than 1 MB past the code now (fonts)
+    add     x1, x1, :lo12:__rela_start
+    adrp    x2, __rela_end
+    add     x2, x2, :lo12:__rela_end
 7:  cmp     x1, x2
     b.hs    8f
     ldp     x3, x4, [x1], #16           // r_offset, r_info
